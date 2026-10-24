@@ -1,0 +1,657 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 收窄外联出口：即便页面被注入，Key 也无法被发往 api.deepseek.com 以外的地址 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; connect-src https://api.deepseek.com; base-uri 'none'; form-action 'none'">
+<title>DeepSeek Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.js" integrity="sha384-zYPBGXwO4633CABX/5Spf6emCKUJCfoOkhOMYyxMsatqQZPnDblmmOewfjsIVWCM" crossorigin="anonymous"></script>
+<style>
+  /* 设计令牌 */
+  :root {
+    --canvas: #0d1117;
+    --panel: #161b22;
+    --line: #30363d;
+    --ink: #e6edf3;
+    --ink-dim: #8b949e;
+    --brand: #58a6ff;
+    --ok: #3fb950;
+    --warn: #d2991d;
+    --bad: #f85149;
+    --violet: #a371f7;
+    --radius: 12px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    padding: 2rem;
+    background: var(--canvas);
+    color: var(--ink);
+    font: 400 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  .shell { max-width: 1000px; margin-inline: auto; }
+
+  /* 顶栏 */
+  .topbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .topbar__brand { font-size: 1.5rem; font-weight: 600; }
+  .topbar__side { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
+
+  .stamp { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: var(--ink-dim); }
+  .stamp__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+    animation: breathe 2s ease-in-out infinite;
+  }
+  @keyframes breathe { 0%, 100% { opacity: 1 } 50% { opacity: 0.3 } }
+
+  .icon-btn {
+    padding: 6px 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--ink);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .icon-btn:hover { border-color: var(--brand); color: var(--brand); }
+
+  /* 指标卡 */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .stat {
+    padding: 1.25rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    transition: border-color 0.2s;
+  }
+  .stat:hover { border-color: var(--brand); }
+  .stat__label {
+    margin-bottom: 0.5rem;
+    color: var(--ink-dim);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .stat__value { font-size: 2rem; font-weight: 700; line-height: 1.1; }
+  .stat__note { margin-top: 0.3rem; color: var(--ink-dim); font-size: 0.78rem; }
+
+  .t-brand { color: var(--brand); }
+  .t-warn { color: var(--warn); }
+  .t-bad { color: var(--bad); }
+  .t-violet { color: var(--violet); }
+
+  /* 图表面板 */
+  .panel {
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+  }
+  .panel__title {
+    margin-bottom: 1rem;
+    color: var(--ink-dim);
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+  .canvas-box { position: relative; width: 100%; height: 300px; }
+  canvas { width: 100% !important; height: 100% !important; }
+
+  /* 状态与页脚 */
+  .hint { margin-top: 0.5rem; color: var(--ink-dim); font-size: 0.8rem; text-align: center; }
+  .hint--bad { color: var(--bad); }
+  .foot {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--line);
+    color: var(--ink-dim);
+    font-size: 0.75rem;
+    text-align: center;
+  }
+
+  /* 设置面板 */
+  .sheet {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.7);
+  }
+  .sheet.is-open { display: flex; }
+  .sheet__box {
+    width: 420px;
+    max-width: 90vw;
+    padding: 2rem;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--panel);
+  }
+  .sheet__box h2 { margin-bottom: 1rem; font-size: 1.1rem; font-weight: 600; }
+  .sheet__box p { margin-bottom: 0.75rem; color: var(--ink-dim); font-size: 0.82rem; line-height: 1.5; }
+  .sheet__box a { color: var(--brand); }
+  .sheet__note { font-size: 0.72rem; }
+  .sheet__field {
+    display: block;
+    margin-bottom: 0.4rem;
+    color: var(--ink-dim);
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .sheet__input {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--canvas);
+    color: var(--ink);
+    font-size: 0.9rem;
+    outline: none;
+  }
+  .sheet__input:focus { border-color: var(--brand); }
+  .sheet__error { display: none; margin-top: 0.5rem; color: var(--bad); font-size: 0.75rem; }
+  .sheet__row { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.25rem; }
+
+  .btn-solid {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 8px;
+    background: var(--brand);
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-solid:hover { opacity: 0.85; }
+  .btn-text {
+    padding: 8px 16px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink-dim);
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .btn-text:hover { border-color: var(--bad); color: var(--bad); }
+</style>
+</head>
+<body>
+
+<!-- 设置面板 -->
+<div class="sheet" id="settingsModal">
+  <div class="sheet__box" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <h2 id="settingsTitle">⚙️ 设置 API Key</h2>
+    <p>在 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com/api_keys</a> 创建并复制你的 API Key。</p>
+    <p class="sheet__note">Key 仅保存在当前标签页（关闭标签页即清除），不会上传到任何服务器。</p>
+    <label class="sheet__field" for="apiKeyInput">DeepSeek API Key</label>
+    <input type="password" id="apiKeyInput" class="sheet__input" placeholder="sk-...">
+    <div class="sheet__row">
+      <button class="btn-text" onclick="clearKey()">清除并退出</button>
+      <button class="btn-solid" onclick="saveKey()">保存</button>
+    </div>
+    <p class="sheet__error" id="modalError"></p>
+  </div>
+</div>
+
+<div class="shell">
+  <header class="topbar">
+    <h1 class="topbar__brand">🤖 DeepSeek Dashboard</h1>
+    <div class="topbar__side">
+      <div class="stamp">
+        <span class="stamp__dot"></span>
+        <span id="lastRefresh">--</span>
+        <span>· 每5分钟</span>
+      </div>
+      <button class="icon-btn" onclick="exportHistory()" title="导出历史数据">⬇</button>
+      <button class="icon-btn" onclick="document.getElementById('importFile').click()" title="导入历史数据">⬆</button>
+      <input type="file" id="importFile" accept="application/json" hidden onchange="importHistory(this)">
+      <button class="icon-btn" onclick="openSettings()" title="修改 API Key">⚙️</button>
+    </div>
+  </header>
+
+  <section class="stats">
+    <article class="stat">
+      <div class="stat__label">💰 账户余额</div>
+      <div class="stat__value t-brand" id="totalBalance">--</div>
+      <div class="stat__note" id="balanceSub">CNY</div>
+    </article>
+    <article class="stat">
+      <div class="stat__label">📉 本月消费</div>
+      <div class="stat__value t-bad" id="monthConsume">--</div>
+      <div class="stat__note" id="monthConsumeSub">本月累计消耗</div>
+    </article>
+    <article class="stat">
+      <div class="stat__label">🔥 本日消耗</div>
+      <div class="stat__value t-warn" id="todayConsume">--</div>
+      <div class="stat__note">今日消耗</div>
+    </article>
+    <article class="stat">
+      <div class="stat__label">📊 日均消耗</div>
+      <div class="stat__value t-violet" id="avgDaily">--</div>
+      <div class="stat__note" id="avgDailySub">本月日均</div>
+    </article>
+  </section>
+
+  <section class="panel">
+    <h3 class="panel__title">📈 每日消费与余额 (本月 · 无柱=当日无数据 · 黄=跨日缺口)</h3>
+    <div class="canvas-box"><canvas id="dailyChart" role="img" aria-label="本月每日消费与余额趋势"></canvas></div>
+  </section>
+
+  <div class="hint" id="status">正在获取数据...</div>
+  <footer class="foot">DeepSeek API · 每 5 分钟自动刷新 · 历史数据保存在浏览器本地，可导出备份</footer>
+</div>
+
+<script>
+const API_URL = 'https://api.deepseek.com/user/balance';
+let dailyChart = null;
+
+// ===== Key 管理 =====
+// Key 只驻留内存 + sessionStorage（关闭标签页即清除），不写入 localStorage。
+const KEY_SLOT = 'ds_api_key';
+let memoryKey = (() => {
+  try { return sessionStorage.getItem(KEY_SLOT) || ''; } catch { return ''; }
+})();
+
+const getKey = () => memoryKey;
+
+function setKey(key) {
+  memoryKey = key || '';
+  try {
+    if (memoryKey) sessionStorage.setItem(KEY_SLOT, memoryKey);
+    else sessionStorage.removeItem(KEY_SLOT);
+  } catch { /* 存储不可用时仅保留在内存 */ }
+}
+
+// 清理旧版本遗留在 localStorage 中的明文 Key
+function purgeLegacyKey() {
+  try { localStorage.removeItem(KEY_SLOT); } catch { /* ignore */ }
+}
+
+function modalError(msg) {
+  const el = document.getElementById('modalError');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function saveKey() {
+  const key = document.getElementById('apiKeyInput').value.trim();
+  if (!key.startsWith('sk-')) return modalError('请输入有效的 API Key（以 sk- 开头）');
+  setKey(key);
+  closeSettings();
+  doRefresh();
+}
+
+function clearKey() {
+  setKey('');
+  closeSettings();
+}
+
+function openSettings() {
+  document.getElementById('apiKeyInput').value = getKey();
+  document.getElementById('modalError').style.display = 'none';
+  document.getElementById('settingsModal').classList.add('is-open');
+  document.getElementById('apiKeyInput').focus();
+}
+
+function closeSettings() {
+  document.getElementById('settingsModal').classList.remove('is-open');
+}
+
+// ===== 工具 =====
+const pad2 = n => String(n).padStart(2, '0');
+
+// 按本地时区取日期：不能用 toISOString()，那是 UTC，UTC+8 每天 0-8 点会造成日期错位
+const localDate = ts => {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+};
+
+// 只用于区分不同账号的历史，不保存也不暴露 Key 内容
+const fingerprint = key => {
+  let h = 5381;
+  for (let i = 0; i < key.length; i++) h = ((h * 33) ^ key.charCodeAt(i)) >>> 0;
+  return h.toString(16);
+};
+
+const money = (v, cur) => (cur === 'USD' ? '$' : '¥') + v.toFixed(2);
+
+// ===== 历史存储 =====
+// 只记录"余额发生变化"的时刻：样本量从 12 万级降到几百条，且每条差值都是真实变动。
+// 日期不落盘，读取时按本地时区推导，从根上消除 UTC 错位。
+const STORE_KEY = 'ds_history_v2';
+const LEGACY_KEY = 'ds_history';
+const POLL_MS = 5 * 60 * 1000;        // 余额只有 2 位小数，5 分钟采样已足够
+const KEEP_MS = 90 * 24 * 3600 * 1000;
+
+let store = { k: '', cur: 'CNY', lastPoll: 0, s: [] };   // k=账号指纹, s=[{t,b}]
+
+function loadStore() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+    if (parsed && Array.isArray(parsed.s)) store = parsed;
+  } catch { /* 数据损坏则从空开始 */ }
+}
+
+function persist() {
+  const cutoff = Date.now() - KEEP_MS;
+  store.s = store.s.filter(e => e.t > cutoff);
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(store));
+  } catch {
+    // 配额不足：丢掉较老的一半再试一次，避免整次刷新失败
+    store.s = store.s.slice(-Math.max(1, store.s.length >> 1));
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(store)); } catch { /* 放弃写入 */ }
+  }
+}
+
+// 旧版把 UTC 日期一起存了，迁移时只保留时间戳
+function migrateLegacyHistory(key) {
+  let raw = null;
+  try { raw = localStorage.getItem(LEGACY_KEY); } catch { return; }
+  if (!raw) return;
+  try {
+    const old = JSON.parse(raw);
+    if (!store.s.length && Array.isArray(old)) {
+      store.s = old
+        .map(e => ({ t: new Date(e.time).getTime(), b: Number(e.balance) }))
+        .filter(e => e.t > 0 && Number.isFinite(e.b))
+        .sort((a, b) => a.t - b.t);
+      if (key) store.k = fingerprint(key);
+      persist();
+    }
+  } catch { /* 忽略无法解析的旧数据 */ }
+  try { localStorage.removeItem(LEGACY_KEY); } catch { /* ignore */ }
+}
+
+function recordSample(total, cur, key) {
+  const fp = fingerprint(key);
+  // 只有"已有归属且与当前不一致"时才清空，避免空身份把刚导入的数据误删
+  if ((store.k && store.k !== fp) || (store.s.length && store.cur !== cur)) store.s = [];
+  store.k = fp;
+  store.cur = cur;
+  const last = store.s[store.s.length - 1];
+  if (!last || last.b !== total) store.s.push({ t: Date.now(), b: total });
+  store.lastPoll = Date.now();
+  persist();
+}
+
+// ===== 导入 / 导出 =====
+function exportHistory() {
+  if (!store.s.length) return setStatus('暂无历史数据可导出', 'error');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(store)], { type: 'application/json' }));
+  a.download = `deepseek-balance-${localDate(Date.now())}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function importHistory(input) {
+  const file = input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!data || !Array.isArray(data.s)) throw new Error('不是本工具导出的文件');
+    store = {
+      k: data.k || '',
+      cur: data.cur === 'USD' ? 'USD' : 'CNY',
+      lastPoll: Number(data.lastPoll) || 0,
+      s: data.s.filter(e => Number.isFinite(e.t) && Number.isFinite(e.b)).sort((a, b) => a.t - b.t),
+    };
+    persist();
+    render();
+    const otherAccount = store.k && getKey() && store.k !== fingerprint(getKey());
+    setStatus(`✓ 已导入 ${store.s.length} 条记录` + (otherAccount ? '（注意：属于其他账号，下次刷新会清空）' : ''));
+  } catch (e) {
+    setStatus(`✗ 导入失败：${e.message}`, 'error');
+  }
+}
+
+// ===== 统计 =====
+// 用相邻样本的差值累加，而不是"当天首尾差"：中途充值不会把当天消费抹成 0，
+// 长时间未打开页面时也只是丢失粒度，不会丢失总量。
+function analyze(samples) {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const todayStr = localDate(now.getTime());
+  const perDay = new Map();
+  let monthSpend = 0, todaySpend = 0, monthCredit = 0;
+
+  for (let i = 1; i < samples.length; i++) {
+    const prev = samples[i - 1], cur = samples[i];
+    if (cur.t < monthStart) continue;
+    const day = localDate(cur.t);
+    const delta = +(cur.b - prev.b).toFixed(2);
+    const rec = perDay.get(day) || { spend: 0, credit: 0, est: false, balance: cur.b };
+    // 跨越日界且余额确实变了，才无法确定这笔变动属于哪一天
+    if (delta !== 0 && localDate(prev.t) !== day) rec.est = true;
+    rec.balance = cur.b;
+    if (delta < 0) {
+      rec.spend -= delta;
+      monthSpend -= delta;
+      if (day === todayStr) todaySpend -= delta;
+    } else if (delta > 0) {
+      rec.credit += delta;
+      monthCredit += delta;
+    }
+    perDay.set(day, rec);
+  }
+
+  const lastDay = now.getDate();
+  const daily = [];
+  for (let d = 1; d <= lastDay; d++) {
+    const rec = perDay.get(`${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(d)}`);
+    daily.push({
+      label: pad2(d),
+      spend: rec ? +rec.spend.toFixed(2) : 0,
+      balance: rec ? rec.balance : null,
+      est: rec ? rec.est : false,
+      has: !!rec,
+    });
+  }
+
+  // 分母只算"有数据的那几天"，月初没打开过页面时不会把日均摊薄
+  const firstIdx = daily.findIndex(d => d.has);
+  const daysCounted = firstIdx >= 0 ? lastDay - firstIdx : 1;
+
+  return { monthSpend, todaySpend, monthCredit, daily, avgDaily: monthSpend / daysCounted };
+}
+
+// ===== 图表 =====
+function initChart() {
+  if (typeof Chart === 'undefined') {
+    // 离线 / CDN 被拦 / SRI 不匹配时不能让整个页面挂掉
+    setStatus('✗ 图表库未加载（离线或被拦截），数据仍可刷新与导出', 'error');
+    return;
+  }
+  dailyChart = new Chart(document.getElementById('dailyChart').getContext('2d'), {
+    data: {
+      labels: [],
+      datasets: [
+        { type: 'bar', label: '日消费', data: [], backgroundColor: 'rgba(88,166,255,0.45)', borderColor: '#58a6ff', borderWidth: 1, borderRadius: 4, yAxisID: 'y', order: 2 },
+        { type: 'line', label: '余额', data: [], borderColor: '#a371f7', borderWidth: 2, pointRadius: 2.5, pointHitRadius: 8, tension: 0.3, spanGaps: true, yAxisID: 'y1', order: 1 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { boxWidth: 10, font: { size: 11 }, color: '#8b949e' } },
+        tooltip: { callbacks: { label: c => `${c.dataset.label}: ${money(c.parsed.y ?? 0, store.cur)}` } },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 8, font: { size: 10 } } },
+        y: { beginAtZero: true, grid: { color: 'rgba(48,54,61,0.45)' }, ticks: { font: { size: 10 }, callback: v => money(v, store.cur) } },
+        y1: { position: 'right', grid: { display: false }, ticks: { font: { size: 10 }, callback: v => money(v, store.cur) } },
+      },
+    },
+  });
+}
+
+function updateChart(m) {
+  if (!dailyChart) return;
+  const ds = dailyChart.data.datasets;
+  dailyChart.data.labels = m.daily.map(d => d.label);
+  ds[0].data = m.daily.map(d => d.spend);
+  ds[0].backgroundColor = m.daily.map(d =>
+    !d.has ? 'rgba(139,148,158,0.12)' : d.est ? 'rgba(210,153,29,0.5)' : 'rgba(88,166,255,0.45)');
+  ds[1].data = m.daily.map(d => d.balance);
+  dailyChart.update();
+}
+
+// ===== 渲染 =====
+function render(info) {
+  const last = store.s[store.s.length - 1];
+  const total = info ? info.total : last ? last.b : 0;
+  const cur = info ? info.cur : store.cur;
+  const m = analyze(store.s);
+
+  document.getElementById('totalBalance').textContent = money(total, cur);
+  document.getElementById('balanceSub').textContent = info && info.granted != null
+    ? `${cur} · 赠送 ${money(info.granted, cur)} · 充值 ${money(info.topped, cur)}`
+    : cur;
+  document.getElementById('monthConsume').textContent = money(m.monthSpend, cur);
+  document.getElementById('monthConsumeSub').textContent = m.monthCredit > 0
+    ? `本月累计消耗 · 期间充值 ${money(m.monthCredit, cur)}`
+    : '本月累计消耗';
+  document.getElementById('todayConsume').textContent = money(m.todaySpend, cur);
+  document.getElementById('avgDaily').textContent = money(m.avgDaily, cur);
+  document.getElementById('avgDailySub').textContent = store.s.length < 2
+    ? '需要至少两次采样才能估算'
+    : `本月第 ${new Date().getDate()} 天` + (m.avgDaily > 0 ? ` · 预计可用 ${Math.floor(total / m.avgDaily)} 天` : '');
+
+  updateChart(m);
+}
+
+// ===== 主流程 =====
+const SILENT = Symbol('silent');   // 已单独提示过的错误，不再重复渲染
+let timer = null;
+let inflight = false;
+
+function setStatus(text, isBad) {
+  const el = document.getElementById('status');
+  el.textContent = text;
+  el.className = isBad ? 'hint hint--bad' : 'hint';
+}
+
+function schedule(ms = POLL_MS) {
+  clearTimeout(timer);
+  timer = setTimeout(doRefresh, ms);
+}
+
+function pickBalance(data) {
+  const infos = Array.isArray(data && data.balance_infos) ? data.balance_infos : [];
+  // 可能同时返回 CNY 与 USD 且顺序不稳定：只取一种，绝不求和
+  const info = infos.find(i => parseFloat(i.total_balance) > 0) || infos[0];
+  if (!info) return null;
+  const num = v => {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  return {
+    cur: info.currency === 'USD' ? 'USD' : 'CNY',
+    total: num(info.total_balance),          // 官方口径：赠送 + 充值，扣费优先扣赠送
+    granted: num(info.granted_balance),
+    topped: num(info.topped_up_balance),
+    available: data.is_available !== false,
+  };
+}
+
+async function doRefresh() {
+  if (inflight) return;                      // 防止慢请求与下一次轮询叠加
+  const key = getKey();
+  if (!key) {
+    setStatus('请设置 API Key', 'error');
+    openSettings();
+    return;
+  }
+
+  inflight = true;
+  let nextDelay = POLL_MS;
+  const ctrl = new AbortController();
+  const abortTimer = setTimeout(() => ctrl.abort(), 15000);
+
+  try {
+    setStatus('正在刷新...');
+    const resp = await fetch(API_URL, {
+      headers: { 'Authorization': `Bearer ${key}`, 'Accept': 'application/json' },
+      signal: ctrl.signal,
+    });
+
+    if (resp.status === 401) {
+      nextDelay = 0;                         // Key 失效就停轮询，避免持续打接口
+      setStatus('✗ Key 无效或已失效，已暂停自动刷新', 'error');
+      openSettings();
+      throw SILENT;
+    }
+    if (!resp.ok) {
+      if (resp.status === 429) nextDelay = Math.min(POLL_MS * 4, 15 * 60 * 1000);
+      throw new Error(`HTTP ${resp.status}${resp.status === 429 ? '（触发限流，稍后重试）' : ''}`);
+    }
+
+    const info = pickBalance(await resp.json());
+    if (!info) throw new Error('响应中没有余额信息');
+
+    recordSample(info.total, info.cur, key);
+    render(info);
+
+    const t = new Date();
+    document.getElementById('lastRefresh').textContent =
+      `上次刷新: ${pad2(t.getHours())}:${pad2(t.getMinutes())}:${pad2(t.getSeconds())}`;
+    if (info.available) setStatus('✓ 数据已更新');
+    else setStatus('⚠ 余额不足，API 调用会失败', 'error');
+  } catch (err) {
+    if (err !== SILENT) setStatus(`✗ ${err.name === 'AbortError' ? '请求超时' : err.message}`, 'error');
+  } finally {
+    clearTimeout(abortTimer);
+    inflight = false;
+    if (nextDelay) schedule(nextDelay);
+  }
+}
+
+// ===== 启动 =====
+loadStore();
+purgeLegacyKey();
+initChart();
+const startKey = getKey();
+migrateLegacyHistory(startKey);
+if (store.s.length) render();
+if (startKey) {
+  doRefresh();
+} else {
+  setStatus('请设置 API Key', 'error');
+  openSettings();
+}
+
+// 后台标签页的定时器会被节流，回到前台且已过一个周期就补采一次
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && Date.now() - store.lastPoll > POLL_MS) doRefresh();
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeSettings();
+});
+</script>
+</body>
+</html>
