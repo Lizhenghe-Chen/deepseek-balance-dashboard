@@ -241,10 +241,8 @@
   .block__legend { display: inline-flex; align-items: center; color: var(--ink-3); }
   .dot { width: 7px; height: 7px; border-radius: 2px; display: inline-block; margin: 0 5px 0 10px; }
   .block__legend .dot:first-child { margin-left: 0; }
-  .dot--official { background: #4fdfd0; }
-  .dot--observed { background: rgba(46, 196, 182, 0.45); }
-  .dot--gap { background: rgba(232, 163, 61, 0.62); }
-  .dot--line { width: 12px; height: 2px; border-radius: 1px; background: var(--coral); }
+  .dot--cum { background: #4fdfd0; }
+  .dot--official { width: 12px; height: 2px; border-radius: 1px; background: rgba(232, 163, 61, 0.9); }
   .canvas-box { position: relative; width: 100%; height: 320px; }
   .chart-empty {
     position: absolute;
@@ -665,7 +663,7 @@
     <div class="balance__aside">
       <span class="badge badge--dim" id="balanceBadge">等待数据</span>
       <span class="balance__delta" id="balanceDelta">最近变动 —</span>
-      <span class="balance__stamp">上次刷新 <b id="lastRefresh">--</b> · 每 5 分钟</span>
+      <span class="balance__stamp">上次刷新 <b id="lastRefresh">--</b> · 每 <b id="pollNote">1</b> 分钟</span>
     </div>
   </section>
 
@@ -689,12 +687,13 @@
 
   <section class="block">
     <div class="block__head">
-      <h2 class="block__title">每日消费与余额</h2>
+      <h2 class="block__title">今日消费</h2>
       <span class="block__meta block__legend" aria-hidden="true">
-        <i class="dot dot--official"></i>官方<i class="dot dot--observed"></i>观测<i class="dot dot--gap"></i>缺口<i class="dot dot--line"></i>余额
+        <i class="dot dot--cum"></i>累计
+        <span id="legendOfficial" hidden><i class="dot dot--official"></i>官方今日合计</span>
       </span>
     </div>
-    <div class="canvas-box"><canvas id="dailyChart" role="img" aria-label="本月每日消费与余额趋势"></canvas><p class="chart-empty" id="chartEmpty">还没有采样数据 · 第一次刷新成功后开始记录</p></div>
+    <div class="canvas-box"><canvas id="todayChart" role="img" aria-label="今日累计消费曲线"></canvas><p class="chart-empty" id="chartEmpty">今天还没有消费记录 · 页面开始采样后自动绘制</p></div>
   </section>
 
   <section class="block" id="usageBlock">
@@ -731,7 +730,7 @@
   <div class="status" id="status" data-tone="info" role="status"><span class="status__dot"></span><span id="statusText">正在获取数据…</span><button class="status__undo" id="statusUndo" type="button" hidden>撤销</button></div>
 
   <footer class="foot">
-    <p>DeepSeek API · 每 5 分钟自动刷新 · 数据只保存在本机浏览器</p>
+    <p>DeepSeek API · 前台每分钟采样 · 数据只保存在本机浏览器</p>
     <details class="foot__more">
       <summary>精度与口径说明</summary>
       <p>余额接口只返回 2 位小数（±¥0.005/次），所以单日数字有物理下限：不足 ¥0.01 的当天会显示 ¥0.00。页面未打开期间的整段消费会记到重新打开的那一天，跨零点处以黄色标注；导入官方用量后，已过去的日子改用官方日成本（精确到分），今天取官方与观测中的较大值。</p>
@@ -741,8 +740,7 @@
 
 <script>
 const API_URL = 'https://api.deepseek.com/user/balance';
-let dailyChart = null;
-let lastModel = null;              // 最近一次渲染的统计结果，供 tooltip 判断"低于分辨率"
+let todayChart = null;
 
 // ===== Key 管理 =====
 // Key 只驻留内存 + sessionStorage（关闭标签页即清除），不写入 localStorage。
@@ -936,8 +934,11 @@ const setMoney = (id, v, cur) => animateNumber(document.getElementById(id), v, x
 // 日期不落盘，读取时按本地时区推导，从根上消除 UTC 错位。
 const STORE_KEY = 'ds_history_v2';
 const LEGACY_KEY = 'ds_history';
-const POLL_MS = 5 * 60 * 1000;        // 余额只有 2 位小数，5 分钟采样已足够
+const POLL_VISIBLE = 60 * 1000;         // 可见时 1 分钟：分钟刻度才有意义
+const POLL_HIDDEN = 5 * 60 * 1000;      // 后台标签页会被节流，没必要空转
+const pollInterval = () => (document.hidden ? POLL_HIDDEN : POLL_VISIBLE);
 const KEEP_MS = 90 * 24 * 3600 * 1000;
+const FULL_RES_MS = 48 * 3600 * 1000;   // 48 小时内保留每次采样，更早只留余额变动的点
 // 仅用于顶部「余额偏低」徽章的提醒阈值，不参与任何计算
 const LOW_BALANCE = { CNY: 10, USD: 2 };
 // 常见状态码的友好解释（官方文档只列了 400/401/402/422/429/500/503）
@@ -958,8 +959,17 @@ function loadStore() {
 }
 
 function persist() {
-  const cutoff = Date.now() - KEEP_MS;
-  store.s = store.s.filter(e => e.t > cutoff);
+  // 每次请求都落一条，4 天内保留完整采样（分钟级定位），更早的只留余额变动的点，
+  // 否则 1 分钟轮询 × 90 天 ≈ 13 万条，必然撑爆 localStorage。
+  const now = Date.now(), cutoff = now - KEEP_MS, fullFrom = now - FULL_RES_MS;
+  const kept = [];
+  for (const e of store.s) {
+    if (e.t <= cutoff) continue;
+    const prev = kept[kept.length - 1];
+    if (e.t < fullFrom && prev && prev.b === e.b) continue;   // 旧数据里的重复值只留第一条
+    kept.push(e);
+  }
+  store.s = kept;
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(store));
   } catch {
@@ -1003,9 +1013,12 @@ function recordSample(total, cur, key) {
   }
   store.k = fp;
   store.cur = cur;
+  // 每次请求都记一条（余额没变也记），这样曲线的时间刻度就是真实采样时刻；
+  // 只有连续两次请求间隔不足 20 秒且余额未变时才合并，避免手动连点刷屏。余额一变必记。
+  const now = Date.now();
   const last = store.s[store.s.length - 1];
-  if (!last || last.b !== total) store.s.push({ t: Date.now(), b: total });
-  store.lastPoll = Date.now();
+  if (!last || last.b !== total || now - last.t >= 20 * 1000) store.s.push({ t: now, b: total });
+  store.lastPoll = now;
   persist();
 }
 
@@ -1123,64 +1136,112 @@ function analyze(samples) {
 }
 
 // ===== 图表 =====
+// ===== 图表：今日累计消费（阶梯）=====
+// 余额只有 2 位小数，所以曲线天然是阶梯：每 ¥0.01 一跳。把跳变放在"观测到它的那一刻"，
+// 配合前台 1 分钟采样，台阶落点误差约 ±1 分钟。
+const fmtClock = v => {
+  const m = Math.round(v);
+  return m >= 1440 ? '24:00' : `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+};
+
+function todaySeries() {
+  const now = Date.now();
+  const d = new Date(now);
+  const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const toMin = t => (t - dayStart) / 60000;
+  const nowMin = +toMin(now).toFixed(2);
+  const pts = [{ x: 0, y: 0 }];
+  let cum = 0, steps = 0, gap = false, lastAt = 0;
+
+  const s = store.s;
+  const first = s.findIndex(e => e.t >= dayStart);
+  if (first < 0) return { pts: [], cum: 0, steps: 0, gap: false, lastAt: 0, nowMin };
+
+  for (let i = Math.max(first, 1); i < s.length; i++) {
+    const delta = +(s[i].b - s[i - 1].b).toFixed(2);
+    if (delta >= 0) continue;                       // 充值 / 赠送到账不算消费
+    cum = +(cum - delta).toFixed(2);
+    steps++;
+    lastAt = s[i].t;
+    // 前一次采样离零点太远，说明那一笔可能包含隔夜消费，无法定位到具体时刻
+    if (s[i - 1].t < dayStart - 5 * 60000) gap = true;
+    pts.push({ x: +toMin(s[i].t).toFixed(2), y: cum, step: -delta });
+  }
+  if (nowMin > pts[pts.length - 1].x) pts.push({ x: nowMin, y: cum, tail: true });
+  return { pts, cum, steps, gap, lastAt, nowMin };
+}
+
 function initChart() {
   if (typeof Chart === 'undefined') {
     // 离线 / CDN 被拦 / SRI 不匹配时不能让整个页面挂掉
     setStatus('图表库未加载（离线或被拦截），数据仍可刷新与导出', 'error');
     return;
   }
-  dailyChart = new Chart(document.getElementById('dailyChart').getContext('2d'), {
+  todayChart = new Chart(document.getElementById('todayChart').getContext('2d'), {
+    type: 'line',
     data: {
-      labels: [],
       datasets: [
-        { type: 'bar', label: '日消费', data: [], backgroundColor: 'rgba(46,196,182,0.62)', borderColor: '#2ec4b6', borderWidth: 0, borderRadius: 3, borderSkipped: false, yAxisID: 'y', order: 2 },
-        { type: 'line', label: '余额', data: [], borderColor: '#e5695f', borderWidth: 1.8, pointRadius: 2, pointBorderWidth: 1.4, pointBackgroundColor: '#0b0d0e', pointBorderColor: '#e5695f', pointHitRadius: 10, tension: 0.32, spanGaps: true, yAxisID: 'y1', order: 1 },
+        {
+          label: '累计消费', data: [], stepped: 'after', fill: true,
+          borderColor: '#4fdfd0', backgroundColor: 'rgba(79,223,208,0.10)', borderWidth: 2,
+          pointRadius: 0, pointHoverRadius: 4, pointBackgroundColor: '#4fdfd0',
+          pointBorderColor: '#0b0d0e', pointBorderWidth: 2,
+        },
+        {
+          label: '官方今日合计', data: [], borderColor: 'rgba(232,163,61,0.9)',
+          borderWidth: 1.4, borderDash: [5, 5], pointRadius: 0, fill: false,
+        },
       ],
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
+      interaction: { mode: 'nearest', intersect: false, axis: 'x' },
       plugins: {
-        legend: { display: false },   // 图例改由标题右侧的色块承担，避免两套图例互相打架
+        legend: { display: false },          // 图例由标题右侧承担
         tooltip: {
+          filter: item => item.datasetIndex === 0,
           callbacks: {
-            // 两位数精度下，不足 ¥0.01 的当天只会显示 0.00，用文案说明而不是假装是 0
+            title: items => fmtClock(items[0].parsed.x),
             label: c => {
-              const day = lastModel && lastModel.daily[c.dataIndex];
-              if (c.datasetIndex === 0 && day) {
-                if (day.source === 'none') return null;
-                if (day.source === 'official') return `日消费（官方）: ${money(c.parsed.y ?? 0, store.cur)}`;
-                if (day.has && c.parsed.y === 0) return '日消费: 低于可测精度';
-                return `日消费${day.est ? '（含跨日缺口）' : ''}: ${money(c.parsed.y ?? 0, store.cur)}`;
-              }
-              return `${c.dataset.label}: ${money(c.parsed.y ?? 0, store.cur)}`;
+              const p = c.raw;
+              if (p.tail) return `累计 ${money(p.y, store.cur)} · 之后暂无消费`;
+              return [`累计 ${money(p.y, store.cur)}`, `这一步 +${money(p.step, store.cur)}`];
             },
           },
         },
       },
       scales: {
-        x: { border: { display: false }, grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 10, color: '#8a9498', font: { size: 10 } } },
-        y: { beginAtZero: true, border: { display: false }, grid: { color: 'rgba(255,255,255,0.055)' }, ticks: { color: '#8a9498', font: { size: 10 }, callback: v => money(v, store.cur) } },
-        y1: { position: 'right', border: { display: false }, grid: { display: false }, ticks: { color: '#8a9498', font: { size: 10 }, callback: v => money(v, store.cur) } },
+        x: {
+          type: 'linear', min: 0, max: 1440,
+          border: { display: false }, grid: { display: false },
+          ticks: { stepSize: 120, color: '#8a9498', font: { size: 10 }, callback: v => fmtClock(v) },
+        },
+        y: {
+          beginAtZero: true, border: { display: false },
+          grid: { color: 'rgba(255,255,255,0.055)' },
+          ticks: { color: '#8a9498', font: { size: 10 }, callback: v => money(v, store.cur) },
+        },
       },
     },
   });
 }
 
-function updateChart(m) {
-  lastModel = m;
-  document.getElementById('chartEmpty').hidden = m.daily.some(d => d.has);
-  if (!dailyChart) return;
-  const ds = dailyChart.data.datasets;
-  dailyChart.data.labels = m.daily.map(d => d.label);
-  ds[0].data = m.daily.map(d => d.spend);
-  // 三种口径用"色相 + 明度"区分，而不是只调透明度：官方亮薄荷、观测暗青、跨日缺口琥珀
-  ds[0].backgroundColor = m.daily.map(d =>
-    d.source === 'none' ? 'rgba(255,255,255,0.045)'
-      : d.source === 'official' ? 'rgba(79,223,208,0.95)'
-      : d.est ? 'rgba(232,163,61,0.62)' : 'rgba(46,196,182,0.42)');
-  ds[1].data = m.daily.map(d => d.balance);
-  dailyChart.update();
+function updateChart(series) {
+  document.getElementById('chartEmpty').hidden = series.pts.length > 1;
+  document.getElementById('legendOfficial').hidden = !series.official;
+  if (!todayChart) return;
+
+  // 左右各留半小时余量：右侧不空出半天，左侧不空出"还没开始工作"的整夜
+  const maxX = Math.min(1440, Math.max(240, Math.ceil((series.nowMin + 30) / 120) * 120));
+  const firstStep = series.pts.length > 1 ? series.pts[1].x : series.nowMin;
+  const minX = Math.max(0, Math.min(Math.floor((firstStep - 30) / 60) * 60, maxX - 120));
+  todayChart.options.scales.x.min = minX;
+  todayChart.options.scales.x.max = maxX;
+
+  const [cum, off] = todayChart.data.datasets;
+  cum.data = series.pts[0].x < minX ? [{ x: minX, y: 0 }, ...series.pts.slice(1)] : series.pts;
+  off.data = series.official ? [{ x: 0, y: series.official }, { x: maxX, y: series.official }] : [];
+  todayChart.update();
 }
 
 // ===== 渲染 =====
@@ -1208,12 +1269,15 @@ function render(info) {
   badge.textContent = badgeText;
   badge.className = `badge ${badgeCls}`;
 
-  // 最近一次余额变动，比"上次刷新时间"更能说明钱在怎么走
-  const prev = store.s[store.s.length - 2];
+  // 最近一次"真正发生"的变动：现在是每分钟采样，多数时刻余额没变，用最后一次采样会恒显示 +¥0.00
   const delta = document.getElementById('balanceDelta');
-  if (last && prev) {
-    const d = +(last.b - prev.b).toFixed(2);
-    delta.textContent = `最近变动 ${d < 0 ? '−' : '+'}${money(Math.abs(d), cur)} · ${clock(last.t)}`;
+  let changedAt = -1;
+  for (let i = store.s.length - 1; i > 0; i--) {
+    if (store.s[i].b !== store.s[i - 1].b) { changedAt = i; break; }
+  }
+  if (changedAt > 0) {
+    const d = +(store.s[changedAt].b - store.s[changedAt - 1].b).toFixed(2);
+    delta.textContent = `最近变动 ${d < 0 ? '−' : '+'}${money(Math.abs(d), cur)} · ${clock(store.s[changedAt].t)}`;
     delta.dataset.sign = d < 0 ? 'down' : d > 0 ? 'up' : 'flat';
   } else {
     delta.textContent = '最近变动 —';
@@ -1227,15 +1291,24 @@ function render(info) {
   document.getElementById('monthConsumeSub').textContent = monthSub.join(' · ');
   setMoney('todayConsume', m.todaySpend, cur);
   // 主数字只给一个：官方与观测取较大值，另一个降级成备注
+  const series = todaySeries();
+  const offToday = officialDay(localDate(Date.now()));
+  if (offToday) series.official = offToday.cost;
   document.getElementById('todayConsumeSub').textContent = m.todaySource === 'official'
     ? (m.todayObserved > 0
       ? `官方口径 · 页面观测到 ${money(m.todayObserved, cur)}`
       : '今日暂无观测采样，取自官方用量')
-    : '跨日缺口会记入重开页面的那一天';
-  setMoney('avgDaily', m.avgDaily, cur);
+    : series.steps > 0
+      ? `每 ${money(0.01, cur)} 一档 · 最近一笔 ${clock(series.lastAt)}${series.gap ? ' · 含隔夜缺口' : ''}`
+      : '页面打开后开始采样';
+  // 样本不足时"日均"就是今天一天的平均，给数字会和"本日消费"重复，看起来像算错了
+  const enough = m.daysCounted >= 3 && m.daily.some(d => d.has);
+  if (enough) setMoney('avgDaily', m.avgDaily, cur);
+  else document.getElementById('avgDaily').textContent = '—';
   document.getElementById('avgDailySub').textContent = avgNote(m, total, cur);
 
-  updateChart(m);
+  updateChart(series);
+  document.getElementById('pollNote').textContent = pollInterval() / 60000;
   updatePeak();
   renderUsage(m);
   maybeNotifyLowBalance(total, cur, info);
@@ -1967,7 +2040,7 @@ function offerUndo(text, action) {
   undoTimer = setTimeout(() => { undoAction = null; btn.hidden = true; }, 8000);
 }
 
-function schedule(ms = POLL_MS) {
+function schedule(ms = pollInterval()) {
   clearTimeout(timer);
   timer = setTimeout(doRefresh, ms);
 }
@@ -2015,7 +2088,7 @@ async function doRefresh() {
   inflight = true;
   document.getElementById('refreshBtn').classList.add('is-busy');
   if (!store.s.length) document.getElementById('balanceCard').classList.add('is-loading');
-  let nextDelay = POLL_MS;
+  let nextDelay = pollInterval();
   const ctrl = new AbortController();
   const abortTimer = setTimeout(() => ctrl.abort(), 15000);
 
@@ -2034,7 +2107,8 @@ async function doRefresh() {
       throw SILENT;
     }
     if (!resp.ok) {
-      if (resp.status === 429) nextDelay = Math.min(POLL_MS * 4, 15 * 60 * 1000);
+      // 限流时退到 5 分钟起，连续触发最长退到 15 分钟，不空转打接口
+      if (resp.status === 429) nextDelay = Math.min(Math.max(pollInterval() * 5, POLL_HIDDEN), 15 * 60 * 1000);
       const hint = HTTP_HINT[resp.status];
       throw new Error(`HTTP ${resp.status}${hint ? `（${hint}）` : ''}`);
     }
@@ -2086,9 +2160,13 @@ if (startKey) {
 
 // 后台标签页的定时器会被节流，回到前台且已过一个周期就补采一次
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) return;
   updatePeak();
-  if (Date.now() - store.lastPoll > POLL_MS) doRefresh();
+  if (document.hidden) {
+    schedule(POLL_HIDDEN);          // 切到后台就降频，别空转
+    return;
+  }
+  if (getKey() && Date.now() - store.lastPoll > POLL_VISIBLE) doRefresh();
+  else schedule();
 });
 
 // 峰谷徽章每分钟刷新（只改文案，不发请求）
