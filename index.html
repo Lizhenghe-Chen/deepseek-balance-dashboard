@@ -499,7 +499,28 @@
     background: var(--surface);
     box-shadow: 0 26px 60px -24px rgba(0, 0, 0, 0.85);
   }
+  .sheet__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
   .sheet__title { margin-bottom: 6px; font-size: 1.02rem; font-weight: 600; }
+  .sheet__close {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    margin: -3px -4px 0 0;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--r);
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+    transition: color 0.18s var(--ease), border-color 0.18s var(--ease), background-color 0.18s var(--ease);
+  }
+  .sheet__close svg { width: 15px; height: 15px; }
+  .sheet__close:hover { color: var(--ink); border-color: var(--line-2); background: rgba(255, 255, 255, 0.04); }
+  .sheet__close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (pointer: coarse) { .sheet__close { width: 40px; height: 40px; margin-top: -8px; } }
   .sheet__text { margin-bottom: 14px; font-size: 0.8rem; line-height: 1.6; color: var(--ink-3); }
   .sheet__status {
     margin-bottom: 16px;
@@ -678,9 +699,14 @@
 <body>
 
 <!-- 设置面板 -->
-<div class="sheet" id="settingsModal">
+<div class="sheet" id="settingsModal" onclick="if (event.target === this) closeSettings()">
   <div class="sheet__box" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
-    <h2 class="sheet__title" id="settingsTitle">API Key</h2>
+    <div class="sheet__head">
+      <h2 class="sheet__title" id="settingsTitle">API Key</h2>
+      <button type="button" class="sheet__close" onclick="closeSettings()" title="关闭（Esc）" aria-label="关闭设置面板">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>
+      </button>
+    </div>
     <p class="sheet__text">在 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com/api_keys</a> 创建并复制你的 Key。</p>
     <div class="sheet__status" id="keyStatus">尚未设置 Key。</div>
     <div id="keyForm">
@@ -697,12 +723,12 @@
       <div class="alert-row">
         <input type="number" id="alertThreshold" class="sheet__input sheet__input--num" min="0" step="1" placeholder="10" aria-label="余额提醒阈值">
         <button class="btn btn--ghost" onclick="saveAlert()">开启 / 更新</button>
-        <button class="btn btn--danger" onclick="disableAlert()">关闭</button>
+        <button class="btn btn--danger" onclick="disableAlert()">关闭提醒</button>
       </div>
       <p class="sheet__note" id="alertStatus">仅在页面打开时生效（后台标签页可能延迟约 1 分钟，手机锁屏不触发）。</p>
     </div>
     <div class="sheet__row" id="keyActions">
-      <button class="btn btn--danger" onclick="clearKey()">清除并退出</button>
+      <button class="btn btn--danger" onclick="clearKey()">清除 Key</button>
       <button class="btn btn--primary" onclick="saveKey()">保存</button>
     </div>
     <p class="sheet__error" id="modalError"></p>
