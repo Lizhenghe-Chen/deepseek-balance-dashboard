@@ -242,7 +242,21 @@
   .dot { width: 7px; height: 7px; border-radius: 2px; display: inline-block; margin: 0 5px 0 10px; }
   .block__legend .dot:first-child { margin-left: 0; }
   .dot--cum { background: #4fdfd0; }
+  .dot--observed { background: rgba(46, 196, 182, 0.42); }
   .dot--official { width: 12px; height: 2px; border-radius: 1px; background: rgba(232, 163, 61, 0.9); }
+  .seg { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+  .seg__btn {
+    padding: 3px 11px;
+    font: 500 0.74rem/1.4 var(--sans);
+    color: var(--ink-3);
+    background: none;
+    border: 0;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: color 0.16s var(--ease), background-color 0.16s var(--ease);
+  }
+  .seg__btn:hover { color: var(--ink-2); }
+  .seg__btn.is-active { color: var(--accent-ink); background: var(--accent); }
   .canvas-box { position: relative; width: 100%; height: 320px; }
   .chart-empty {
     position: absolute;
@@ -520,6 +534,47 @@
   }
   .sheet__switch p { font-size: 0.8rem; line-height: 1.6; color: var(--ink-2); }
   .sheet__switch .sheet__row { margin-top: 12px; }
+  .sheet__accounts { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .acc-list { list-style: none; margin: 6px 0 0; padding: 0; }
+  .acc:first-child { border-top: 1px solid var(--line); }
+  .acc {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .acc.is-active .acc__name { color: var(--accent-bright); }
+  .acc__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .acc__name {
+    padding: 0; text-align: left;
+    font: 500 0.82rem/1.4 var(--sans); color: var(--ink);
+    background: none; border: 0; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .acc__name:hover { text-decoration: underline dotted; }
+  .acc__input {
+    width: 100%; height: 24px; padding: 0 6px;
+    font: 500 0.82rem/1.4 var(--sans); color: var(--ink);
+    background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 5px;
+  }
+  .acc__meta {
+    font-size: 0.72rem; color: var(--ink-3);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+  }
+  .acc__chip {
+    flex: none; padding: 1px 7px;
+    border: 1px solid rgba(46, 196, 182, 0.4); border-radius: 999px;
+    font-size: 0.68rem; color: var(--accent-bright);
+  }
+  .acc__del {
+    flex: none; padding: 3px 9px;
+    font: inherit; font-size: 0.72rem; color: var(--ink-3);
+    background: none; border: 1px solid var(--line-2); border-radius: 6px; cursor: pointer;
+    transition: color 0.16s var(--ease), border-color 0.16s var(--ease);
+  }
+  .acc__del:hover { color: var(--bad); border-color: rgba(239, 107, 98, 0.5); }
+  .acc__del[data-armed] { color: var(--bad); border-color: rgba(239, 107, 98, 0.6); }
+
   .sheet__alert { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
   .alert-row { display: flex; align-items: center; gap: 8px; }
   .link-btn {
@@ -596,16 +651,11 @@
       <label class="sheet__field" for="apiKeyInput">DeepSeek API Key</label>
       <input type="password" id="apiKeyInput" class="sheet__input" placeholder="sk-... 留空表示不修改" autocomplete="new-password" spellcheck="false">
     </div>
-    <div class="sheet__switch" id="switchPanel" hidden>
-      <p><b>检测到新的 Key</b>（指纹 <b id="newFp">--</b>），当前 <b id="histCount">0</b> 条历史记录属于旧 Key。</p>
-      <p class="sheet__note">同一账号轮换 / 重建 Key：选「保留历史」。真的换了账号：选「清空历史」，否则两个账号的余额差会被算成一笔虚假消费。</p>
-      <div class="sheet__row">
-        <button class="btn btn--ghost" onclick="cancelSwitch()">取消</button>
-        <button class="btn btn--danger" onclick="applyKey(false)">清空历史</button>
-        <button class="btn btn--primary" onclick="applyKey(true)">保留历史</button>
-      </div>
+    <div class="sheet__accounts" id="accountList" hidden>
+      <span class="sheet__field">账户历史（每个 Key 一份，互不影响）</span>
+      <ul class="acc-list" id="accItems"></ul>
+      <p class="sheet__note">粘贴某个账户的 Key 就会切回它的历史。同一账户的多个 Key 共享同一个余额池，<b>不要把它们的消费相加</b>。</p>
     </div>
-    <p class="sheet__note" id="backupRow" hidden>切换 Key 前的历史已自动备份。<button class="link-btn" onclick="restoreBackup()">恢复上次切换前的历史</button></p>
     <div class="sheet__alert">
       <span class="sheet__field">低余额提醒</span>
       <div class="alert-row">
@@ -687,13 +737,16 @@
 
   <section class="block">
     <div class="block__head">
-      <h2 class="block__title">今日消费</h2>
-      <span class="block__meta block__legend" aria-hidden="true">
-        <i class="dot dot--cum"></i>累计
-        <span id="legendOfficial" hidden><i class="dot dot--official"></i>官方今日合计</span>
+      <h2 class="block__title">消费趋势</h2>
+      <span class="block__side">
+        <span class="block__meta block__legend" id="chartLegend" aria-hidden="true"></span>
+        <span class="seg" role="group" aria-label="趋势跨度">
+          <button class="seg__btn is-active" data-mode="today" onclick="setChartMode('today')">今天</button>
+          <button class="seg__btn" data-mode="week" onclick="setChartMode('week')">7 天</button>
+        </span>
       </span>
     </div>
-    <div class="canvas-box"><canvas id="todayChart" role="img" aria-label="今日累计消费曲线"></canvas><p class="chart-empty" id="chartEmpty">今天还没有消费记录 · 页面开始采样后自动绘制</p></div>
+    <div class="canvas-box"><canvas id="trendCanvas" role="img" aria-label="消费趋势曲线"></canvas><p class="chart-empty" id="chartEmpty">今天还没有消费记录 · 页面开始采样后自动绘制</p></div>
   </section>
 
   <section class="block" id="usageBlock">
@@ -740,7 +793,6 @@
 
 <script>
 const API_URL = 'https://api.deepseek.com/user/balance';
-let todayChart = null;
 
 // ===== Key 管理 =====
 // Key 只驻留内存 + sessionStorage（关闭标签页即清除），不写入 localStorage。
@@ -773,18 +825,10 @@ function modalError(msg) {
 // Key 只展示掩码，永远不回填明文（回填会让明文常驻 DOM，扩展/DevTools 可直接读）
 const maskKey = key => (key ? `${key.slice(0, 3)}${'•'.repeat(6)}${key.slice(-4)}` : '未设置');
 
-// ===== 换 Key =====
-// 换 Key 有两种语义，必须由用户选：同一账号轮换 Key（保留历史）／真的换了账号（清空历史，
-// 否则两个账号的余额差会被算成虚假消费）。切换前一律先备份，避免误选造成不可逆丢失。
-const BACKUP_KEY = 'ds_history_backup';
-let pendingKey = '';
-
-function backupStore() {
-  if (!store.s.length) return;
-  try {
-    localStorage.setItem(BACKUP_KEY, JSON.stringify({ at: Date.now(), store }));
-  } catch { /* 配额不足时放弃备份，不阻断切换 */ }
-}
+// ===== 换 Key / 多账户 =====
+// 每个 Key（配合币种）对应一份独立档案：换 Key 不再清空历史，也不会把两个账户的余额互相做差。
+// Key 本身从不落盘，所以"切回某个账户"= 重新粘贴它对应的 Key。
+const BACKUP_KEY = 'ds_history_backup';   // 只用于读取 v2 时代的一次性备份
 
 function readBackup() {
   try {
@@ -793,22 +837,13 @@ function readBackup() {
   } catch { return null; }
 }
 
-function restoreBackup() {
-  const b = readBackup();
-  if (!b) return setStatus('没有可恢复的备份', 'error');
-  store = b.store;
-  persist();
-  render();
-  closeSettings();
-  setStatus(`已恢复 ${store.s.length} 条历史（备份于 ${clock(b.at)}）`);
-}
-
 function describeKey() {
   const key = getKey();
   if (!key) return '尚未设置 Key。Key 只保存在当前标签页，刷新会保留，关闭标签页即清除。';
   const last = store.s[store.s.length - 1];
+  const name = store.name || store.userTag || `账户 ${fingerprint(key).slice(0, 6)}`;
   return [
-    `当前 Key：${maskKey(key)}（指纹 ${fingerprint(key)}）`,
+    `当前：${name} · ${maskKey(key)}（指纹 ${fingerprint(key)}）`,
     store.s.length ? `本地历史 ${store.s.length} 条 · ${store.cur} · 最后采样 ${clock(last.t)}` : '尚无本地历史',
   ].join('\n');
 }
@@ -820,64 +855,130 @@ function saveKey() {
   if (!key.startsWith('sk-')) return modalError('请输入有效的 API Key（以 sk- 开头）');
 
   const fp = fingerprint(key);
-  // 没有历史、或指纹与当前一致 → 无需询问
-  if (!store.s.length || !store.k || store.k === fp) return applyKey(true, key);
-
-  pendingKey = key;
-  document.getElementById('newFp').textContent = fp;
-  document.getElementById('histCount').textContent = store.s.length;
-  document.getElementById('switchPanel').hidden = false;
-  document.getElementById('keyForm').hidden = true;
-  document.getElementById('keyActions').hidden = true;
-}
-
-function cancelSwitch() {
-  pendingKey = '';
-  document.getElementById('switchPanel').hidden = true;
-  document.getElementById('keyForm').hidden = false;
-  document.getElementById('keyActions').hidden = false;
-  document.getElementById('apiKeyInput').focus();
-}
-
-function applyKey(keepHistory, explicitKey) {
-  const key = explicitKey || pendingKey;
-  if (!key) return;
-  if (!keepHistory) backupStore();
-
   setKey(key);
-  if (!keepHistory) { store.s = []; store.lastPoll = 0; }
-  store.k = fingerprint(key);                // 先写归属，recordSample 之后就不会再清空
-  persist();
 
-  pendingKey = '';
+  const known = Object.keys(accounts).find(k => k.split('|')[0] === fp);
+  if (known) {
+    store = accounts[known];
+    saveAccounts();
+    closeSettings();
+    render();
+    doRefresh();
+    setStatus(`已切回「${store.name || store.userTag || '账户 ' + fp.slice(0, 6)}」的历史`);
+    return;
+  }
+
+  // 新 Key：先建档案，币种等第一次刷新拿到再归位
+  const before = Object.keys(accounts).length;
+  store = blankAccount(fp, store.cur || 'CNY');
+  if (before >= MAX_ACCOUNTS) {
+    modalError(`最多保存 ${MAX_ACCOUNTS} 个账户，先在下面删掉不用的`);
+    return;
+  }
+  accounts[keyOf(store)] = store;
+  saveAccounts();
   closeSettings();
   render();
   doRefresh();
+  setStatus('已添加新账户，历史从现在开始记录');
 }
 
 function clearKey() {
   setKey('');
   closeSettings();
-  const b = readBackup();
-  setStatus(b ? '已清除 Key。切换前的历史仍在本地，可在设置里恢复。' : '已清除 Key');
+  setStatus('已清除 Key。各账户的历史仍留在本地，重新粘贴对应 Key 即可继续');
 }
 
 function openSettings() {
   document.getElementById('apiKeyInput').value = '';   // 绝不回填明文 Key
   document.getElementById('keyStatus').textContent = describeKey();
   document.getElementById('modalError').style.display = 'none';
-  document.getElementById('switchPanel').hidden = true;
   document.getElementById('keyForm').hidden = false;
   document.getElementById('keyActions').hidden = false;
-  document.getElementById('backupRow').hidden = !readBackup();
+  renderAccounts();
   const alertCfg = readAlert();
   document.getElementById('alertThreshold').value = alertCfg ? alertCfg.threshold : (LOW_BALANCE[store.cur] || 10);
   document.getElementById('alertStatus').textContent = alertCfg
     ? `已开启：余额低于 ${money(alertCfg.threshold, store.cur)} 时提醒（仅页面打开时生效）`
     : '仅在页面打开时生效（后台标签页可能延迟约 1 分钟，手机锁屏不触发）。';
-  pendingKey = '';
   document.getElementById('settingsModal').classList.add('is-open');
   document.getElementById('apiKeyInput').focus();
+}
+
+// 账户列表：名字可改，可逐个删除；当前账户贴了 Key 才是"在用"的那个
+function renderAccounts() {
+  const list = document.getElementById('accItems');
+  const wrap = document.getElementById('accountList');
+  if (!list || !wrap) return;
+  const rows = accountRows();
+  wrap.hidden = rows.length === 0;
+  list.replaceChildren();
+
+  for (const row of rows) {
+    const li = document.createElement('li');
+    li.className = 'acc' + (row.active ? ' is-active' : '');
+
+    const main = document.createElement('div');
+    main.className = 'acc__main';
+
+    const name = document.createElement('button');
+    name.type = 'button';
+    name.className = 'acc__name';
+    name.textContent = row.title;
+    name.title = '点击重命名';
+    name.addEventListener('click', () => startRename(row, name));
+    main.append(name);
+
+    const meta = document.createElement('span');
+    meta.className = 'acc__meta';
+    meta.textContent = row.meta;
+    if (row.rec.userTag) meta.title = `user_id: ${row.rec.userTag}`;
+    main.append(meta);
+
+    li.append(main);
+
+    if (row.active) {
+      const chip = document.createElement('span');
+      chip.className = 'acc__chip';
+      chip.textContent = '当前';
+      li.append(chip);
+    }
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'acc__del';
+    del.textContent = '删除';
+    // 两段式确认：历史删了就只能靠导出的 JSON 找回
+    del.addEventListener('click', () => {
+      if (del.dataset.armed) return deleteAccount(row.key);
+      del.dataset.armed = '1';
+      del.textContent = '确认删除';
+      setTimeout(() => { delete del.dataset.armed; del.textContent = '删除'; }, 4000);
+    });
+    li.append(del);
+
+    list.append(li);
+  }
+}
+
+function startRename(row, btn) {
+  const input = document.createElement('input');
+  input.className = 'acc__input';
+  input.value = row.rec.name || row.rec.userTag || '';
+  input.maxLength = 24;
+  input.placeholder = '给这个账户起个名字';
+  btn.replaceWith(input);
+  input.focus();
+  input.select();
+  const commit = () => {
+    renameAccount(row.key, input.value);
+    input.replaceWith(btn);
+  };
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = row.rec.name || ''; input.blur(); }
+  });
 }
 
 function closeSettings() {
@@ -929,16 +1030,15 @@ function animateNumber(el, to, render) {
 
 const setMoney = (id, v, cur) => animateNumber(document.getElementById(id), v, x => money(x, cur));
 
-// ===== 历史存储 =====
-// 只记录"余额发生变化"的时刻：样本量从 12 万级降到几百条，且每条差值都是真实变动。
-// 日期不落盘，读取时按本地时区推导，从根上消除 UTC 错位。
-const STORE_KEY = 'ds_history_v2';
-const LEGACY_KEY = 'ds_history';
+// ===== 账户档案 =====
+// 每个 (Key 指纹, 币种) 一份独立历史。Key 从不落盘，所以切回某个账户 = 重新粘贴它对应的 Key。
+// 档案键用 指纹|币种：同一账户同时有 CNY 和 USD 时各自记账，绝不混算。
+const STORE_KEY = 'ds_history_v3';
+const LEGACY_STORE_KEY = 'ds_history_v2';
+const MAX_ACCOUNTS = 5;
 const POLL_VISIBLE = 60 * 1000;         // 可见时 1 分钟：分钟刻度才有意义
 const POLL_HIDDEN = 5 * 60 * 1000;      // 后台标签页会被节流，没必要空转
 const pollInterval = () => (document.hidden ? POLL_HIDDEN : POLL_VISIBLE);
-const KEEP_MS = 90 * 24 * 3600 * 1000;
-const FULL_RES_MS = 48 * 3600 * 1000;   // 48 小时内保留每次采样，更早只留余额变动的点
 // 仅用于顶部「余额偏低」徽章的提醒阈值，不参与任何计算
 const LOW_BALANCE = { CNY: 10, USD: 2 };
 // 常见状态码的友好解释（官方文档只列了 400/401/402/422/429/500/503）
@@ -947,36 +1047,172 @@ const HTTP_HINT = {
   422: '参数错误', 429: '触发限流，稍后自动重试', 500: 'DeepSeek 服务端错误',
   502: '网关错误', 503: '服务繁忙，稍后重试',
 };
+// 每条档案最多保留的采样天数（原先 90 天只对单账户成立）
+const KEEP_MS = 60 * 24 * 3600 * 1000;
+const FULL_RES_MS = 48 * 3600 * 1000;   // 48 小时内保留每次采样，更早只留余额变动的点
 
-let store = { k: '', cur: 'CNY', lastPoll: 0, s: [] };   // k=账号指纹, s=[{t,b}]
-let currencySwitchedFrom = '';                            // 本次刷新是否发生了币种切换
+let accounts = {};                                        // '指纹|币种' -> 档案
+let store = null;                                         // 当前档案的引用（结构不变，其它代码照旧读 store.s）
+let currencySwitchedFrom = '';
+
+const accKey = fp => `${fp}|${store ? store.cur : 'CNY'}`;
+const keyOf = rec => `${rec.k}|${rec.cur}`;
+
+function blankAccount(fp, cur) {
+  return { k: fp, name: '', userTag: '', cur: cur || 'CNY', lastPoll: 0, s: [], at: Date.now() };
+}
+
+function sanitizeAccount(rec, fp) {
+  return {
+    k: fp,
+    name: typeof rec.name === 'string' ? rec.name.slice(0, 24) : '',
+    userTag: typeof rec.userTag === 'string' ? rec.userTag.slice(0, 48) : '',
+    cur: rec.cur === 'USD' ? 'USD' : 'CNY',
+    lastPoll: Number(rec.lastPoll) || 0,
+    at: Number(rec.at) || Date.now(),
+    s: Array.isArray(rec.s)
+      ? rec.s.filter(e => Number.isFinite(e.t) && Number.isFinite(e.b)).sort((a, b) => a.t - b.t)
+      : [],
+  };
+}
 
 function loadStore() {
+  const read = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
+  const parsed = read(STORE_KEY);
+
+  if (parsed && parsed.accounts && typeof parsed.accounts === 'object') {
+    for (const [key, rec] of Object.entries(parsed.accounts)) {
+      const [fp, cur] = key.split('|');
+      if (!rec) continue;
+      accounts[key] = sanitizeAccount(rec, fp || '');
+      accounts[key].cur = cur === 'USD' ? 'USD' : accounts[key].cur;
+    }
+    store = accounts[parsed.active] || null;
+  } else {
+    // v2 只有一个档案 + 一个备份槽：都并入新结构，一条都不丢
+    const old = read(LEGACY_STORE_KEY);
+    if (old && Array.isArray(old.s)) {
+      const rec = sanitizeAccount(old, old.k || '');
+      store = rec;
+      if (rec.k) accounts[keyOf(rec)] = rec;
+    }
+    const b = read(BACKUP_KEY);
+    if (b && b.store && Array.isArray(b.store.s) && b.store.s.length) {
+      const rec = sanitizeAccount(b.store, b.store.k || '');
+      if (!accounts[keyOf(rec)]) {
+        accounts[keyOf(rec)] = { ...rec, name: '切换前的历史' };
+        if (!store) store = accounts[keyOf(rec)];
+      }
+    }
+    if (parsed || old) saveAccounts();     // 迁移落盘
+    try { localStorage.removeItem(LEGACY_STORE_KEY); } catch { /* ignore */ }
+    try { localStorage.removeItem(BACKUP_KEY); } catch { /* ignore */ }
+  }
+
+  // 过期档案直接丢掉：1 分钟采样 × 多档案，不清会顶满配额
+  const cutoff = Date.now() - KEEP_MS;
+  for (const [key, rec] of Object.entries(accounts)) {
+    const lastSeen = rec.lastPoll || (rec.s.length ? rec.s[rec.s.length - 1].t : 0);
+    if (lastSeen && lastSeen < cutoff) delete accounts[key];
+  }
+  // 活动档案可能刚被清掉：别让 store 指向一个已经不存在的对象
+  if (!store || (store.k && accounts[keyOf(store)] !== store)) {
+    store = Object.values(accounts).sort((a, b) => b.lastPoll - a.lastPoll)[0] || blankAccount('', 'CNY');
+  }
+}
+
+// 每次请求都落一条，48 小时内保留完整采样（分钟级定位），更早的只留余额变动的点
+function compactSamples(rec) {
+  const now = Date.now(), cutoff = now - KEEP_MS, fullFrom = now - FULL_RES_MS;
+  const kept = [];
+  for (const e of rec.s) {
+    if (e.t <= cutoff) continue;
+    const prev = kept[kept.length - 1];
+    if (e.t < fullFrom && prev && prev.b === e.b) continue;
+    kept.push(e);
+  }
+  rec.s = kept;
+}
+
+function saveAccounts() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
-    if (parsed && Array.isArray(parsed.s)) store = parsed;
-  } catch { /* 数据损坏则从空开始 */ }
+    localStorage.setItem(STORE_KEY, JSON.stringify({ active: store && store.k ? keyOf(store) : '', accounts }));
+  } catch {
+    // 配额不足：先丢最老档案的一半样本，再不行丢最老档案
+    const oldest = Object.values(accounts).sort((a, b) => a.lastPoll - b.lastPoll)[0];
+    if (oldest) {
+      if (oldest.s.length > 1) oldest.s = oldest.s.slice(-Math.max(1, oldest.s.length >> 1));
+      else if (Object.keys(accounts).length > 1) delete accounts[keyOf(oldest)];
+      try { localStorage.setItem(STORE_KEY, JSON.stringify({ active: store && store.k ? keyOf(store) : '', accounts })); }
+      catch { setStatus('浏览器存储已满，历史写入失败', 'error'); }
+    }
+  }
 }
 
 function persist() {
-  // 每次请求都落一条，4 天内保留完整采样（分钟级定位），更早的只留余额变动的点，
-  // 否则 1 分钟轮询 × 90 天 ≈ 13 万条，必然撑爆 localStorage。
-  const now = Date.now(), cutoff = now - KEEP_MS, fullFrom = now - FULL_RES_MS;
-  const kept = [];
-  for (const e of store.s) {
-    if (e.t <= cutoff) continue;
-    const prev = kept[kept.length - 1];
-    if (e.t < fullFrom && prev && prev.b === e.b) continue;   // 旧数据里的重复值只留第一条
-    kept.push(e);
+  compactSamples(store);
+  if (store.k) accounts[keyOf(store)] = store;
+  saveAccounts();
+}
+
+// 切到某个 (指纹, 币种) 档案：存在就复用，不存在就建
+function activateAccount(fp, cur) {
+  const rec = accounts[`${fp}|${cur || 'CNY'}`];
+  if (rec) {
+    store = rec;
+  } else {
+    if (Object.keys(accounts).length >= MAX_ACCOUNTS) {
+      setStatus(`最多保存 ${MAX_ACCOUNTS} 个账户，先在设置里删掉不用的`, 'error');
+      return false;
+    }
+    store = blankAccount(fp, cur || 'CNY');
+    accounts[keyOf(store)] = store;
   }
-  store.s = kept;
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(store));
-  } catch {
-    // 配额不足：丢掉较老的一半再试一次，避免整次刷新失败
-    store.s = store.s.slice(-Math.max(1, store.s.length >> 1));
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(store)); } catch { /* 放弃写入 */ }
+  return true;
+}
+
+// 档案列表：给设置面板用（含"这一份覆盖了几天、最后余额多少"）
+function accountRows() {
+  return Object.entries(accounts)
+    .map(([key, rec]) => {
+      const s = rec.s;
+      const days = new Set(s.map(e => localDate(e.t)));
+      return {
+        key, rec,
+        active: rec === store,
+        title: rec.name || rec.userTag || `账户 ${rec.k.slice(0, 6)}`,
+        meta: [
+          rec.cur,
+          `${s.length} 条`,
+          days.size ? `${days.size} 天` : '无数据',
+          s.length ? money(s[s.length - 1].b, rec.cur) : '—',
+          rec.lastPoll ? `${clock(rec.lastPoll)} 更新` : '未连接',
+        ].join(' · '),
+      };
+    })
+    .sort((a, b) => (b.active - a.active) || (b.rec.lastPoll - a.rec.lastPoll));
+}
+
+function deleteAccount(key) {
+  const rec = accounts[key];
+  if (!rec) return;
+  delete accounts[key];
+  if (rec === store) {
+    store = Object.values(accounts)[0] || blankAccount('', 'CNY');
+    if (store.k) accounts[keyOf(store)] = store;
   }
+  saveAccounts();
+  renderAccounts();
+  render();
+  setStatus(`已删除「${rec.name || rec.userTag || '账户 ' + rec.k.slice(0, 6)}」的历史`);
+}
+
+function renameAccount(key, name) {
+  const rec = accounts[key];
+  if (!rec) return;
+  rec.name = (name || '').trim().slice(0, 24);
+  saveAccounts();
+  renderAccounts();
 }
 
 // 旧版把 UTC 日期一起存了，迁移时只保留时间戳
@@ -1000,16 +1236,11 @@ function migrateLegacyHistory(key) {
 
 function recordSample(total, cur, key) {
   const fp = fingerprint(key);
-  // Key 的切换已在 applyKey 里确认过；这里只兜底"Key 在页面外被改动"的情况
-  if (store.k && store.k !== fp) {
-    backupStore();
-    store.s = [];
-  }
-  // 币种真的变了（例如另一种货币才有余额）：先备份再重开，绝不静默丢历史
-  if (store.s.length && store.cur !== cur) {
-    backupStore();
-    store.s = [];
-    currencySwitchedFrom = store.cur;
+  // Key 在页面外被改动，或首次绑定：切到对应档案（各记各的，绝不互相做差）
+  if (store.k !== fp || store.cur !== cur) {
+    const from = store.cur;
+    if (!activateAccount(fp, cur)) return;        // 档案数超上限，这次不记录
+    if (store.s.length && from !== cur) currencySwitchedFrom = from;
   }
   store.k = fp;
   store.cur = cur;
@@ -1023,11 +1254,12 @@ function recordSample(total, cur, key) {
 }
 
 // ===== 导入 / 导出 =====
+// 导出全部档案（含账户名），换设备时一次带走；旧版单档案 JSON 仍可导入。
 function exportHistory() {
-  if (!store.s.length) return setStatus('暂无历史数据可导出', 'error');
+  const hasData = Object.values(accounts).some(a => a.s.length);
+  if (!hasData) return setStatus('暂无历史数据可导出', 'error');
+  const payload = { v: 3, active: store.k ? keyOf(store) : '', accounts, usage: usage.batches.length ? usage : undefined };
   const a = document.createElement('a');
-  // 官方用量一起导出：否则换设备后主数据会退回观测口径
-  const payload = usage.batches.length ? { ...store, usage } : store;
   a.href = URL.createObjectURL(new Blob([JSON.stringify(payload)], { type: 'application/json' }));
   a.download = `deepseek-balance-${localDate(Date.now())}.json`;
   a.click();
@@ -1040,20 +1272,54 @@ async function importHistory(input) {
   if (!file) return;
   try {
     const data = JSON.parse(await file.text());
-    if (!data || !Array.isArray(data.s)) throw new Error('不是本工具导出的文件');
-    store = {
-      k: data.k || '',
-      cur: data.cur === 'USD' ? 'USD' : 'CNY',
-      lastPoll: Number(data.lastPoll) || 0,
-      s: data.s.filter(e => Number.isFinite(e.t) && Number.isFinite(e.b)).sort((a, b) => a.t - b.t),
-    };
+    if (!data) throw new Error('文件内容无法解析');
+
+    let added = 0, restored = 0;
+    if (data.accounts && typeof data.accounts === 'object') {
+      // 新版：多档案
+      for (const [key, rec] of Object.entries(data.accounts)) {
+        const [fp, cur] = key.split('|');
+        const clean = sanitizeAccount(rec || {}, fp || '');
+        clean.cur = cur === 'USD' ? 'USD' : clean.cur;
+        const exist = accounts[keyOf(clean)];
+        if (exist) {
+          // 合并：同一档案以时间戳并集为准，等价于"两边都看过的都保留"
+          const merged = new Map(exist.s.map(e => [e.t, e]));
+          for (const e of clean.s) merged.set(e.t, e);
+          exist.s = [...merged.values()].sort((x, y) => x.t - y.t);
+          if (!exist.name && clean.name) exist.name = clean.name;
+          restored++;
+        } else {
+          accounts[keyOf(clean)] = clean;
+          added++;
+        }
+      }
+      if (data.active && accounts[data.active]) store = accounts[data.active];
+    } else if (Array.isArray(data.s)) {
+      // 旧版单档案
+      const clean = sanitizeAccount(data, data.k || '');
+      if (accounts[keyOf(clean)]) {
+        const merged = new Map(accounts[keyOf(clean)].s.map(e => [e.t, e]));
+        for (const e of clean.s) merged.set(e.t, e);
+        accounts[keyOf(clean)].s = [...merged.values()].sort((x, y) => x.t - y.t);
+        restored++;
+      } else {
+        accounts[keyOf(clean)] = clean;
+        added++;
+      }
+      store = accounts[keyOf(clean)];
+    } else {
+      throw new Error('不是本工具导出的文件');
+    }
+
     const nextUsage = normalizeUsage(data.usage);
     if (nextUsage) { usage = nextUsage; saveUsage(); }
-    persist();
+    if (!accounts[keyOf(store)] && store.k) accounts[keyOf(store)] = store;
+    saveAccounts();
     render();
-    const otherAccount = store.k && getKey() && store.k !== fingerprint(getKey());
-    setStatus(`已导入 ${store.s.length} 条记录` + (nextUsage ? '（含官方用量）' : '') +
-      (otherAccount ? '（注意：属于其他账号，下次刷新会清空）' : ''));
+    renderAccounts();
+    setStatus(`已导入：新增 ${added} 个账户${restored ? `，合并 ${restored} 个` : ''}` +
+      (nextUsage ? '，含官方用量' : ''));
   } catch (e) {
     setStatus(`导入失败：${e.message}`, 'error');
   }
@@ -1062,6 +1328,18 @@ async function importHistory(input) {
 // ===== 统计 =====
 // 用相邻样本的差值累加，而不是"当天首尾差"：中途充值不会把当天消费抹成 0，
 // 长时间未打开页面时也只是丢失粒度，不会丢失总量。
+// 某天的最终数字：官方日成本优先（精确到分）；今天两个来源都只覆盖一部分，取较大值。
+// 没有对应批次 / 币种不一致时 officialDay 返回 null，自动退回观测值。
+function dayCost(key, rec) {
+  const observed = rec ? +rec.spend.toFixed(2) : 0;
+  const off = officialDay(key);
+  const isToday = key === localDate(Date.now());
+  if (off && (!isToday || off.cost > observed)) {
+    return { spend: off.cost, observed, source: 'official', est: false };
+  }
+  return { spend: observed, observed, source: rec ? 'observed' : 'none', est: !!(rec && rec.est) };
+}
+
 function analyze(samples) {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
@@ -1071,7 +1349,6 @@ function analyze(samples) {
 
   for (let i = 1; i < samples.length; i++) {
     const prev = samples[i - 1], cur = samples[i];
-    if (cur.t < monthStart) continue;
     const day = localDate(cur.t);
     const delta = +(cur.b - prev.b).toFixed(2);
     const rec = perDay.get(day) || { spend: 0, credit: 0, est: false, balance: cur.b };
@@ -1079,70 +1356,60 @@ function analyze(samples) {
     if (delta !== 0 && localDate(prev.t) !== day) rec.est = true;
     rec.balance = cur.b;
     if (delta < 0) rec.spend -= delta;
-    else if (delta > 0) { rec.credit += delta; monthCredit += delta; }
+    else if (delta > 0) {
+      rec.credit += delta;
+      if (cur.t >= monthStart) monthCredit += delta;
+    }
     perDay.set(day, rec);
   }
 
-  // 官方 CSV 的日成本覆盖观测值：已过去的整天优先官方（精确到分）；今天两个来源都只覆盖了一部分
-  // （官方到导出那一刻，观测从页面打开之后），取较大值，宁可偏保守也不要给一个偏小的数。
-  // 没有对应批次 / 币种不一致时 officialDay 返回 null，自动退回观测值。
+  // ---- 本月：日历轴 + 合计 / 日均 / 官方覆盖天数 ----
   const lastDay = now.getDate();
   const daily = [];
-  let monthSpend = 0, todaySpend = 0, observedSpend = 0, officialDays = 0;
-  let todaySource = 'none', todayObserved = 0;
+  let monthSpend = 0, officialDays = 0;
 
   for (let d = 1; d <= lastDay; d++) {
     const key = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(d)}`;
     const rec = perDay.get(key);
-    const observed = rec ? +rec.spend.toFixed(2) : 0;
-    observedSpend += observed;
-    const off = officialDay(key);
-    const isToday = key === todayStr;
-
-    let spend = 0, source = 'none';
-    if (isToday && off && off.cost > observed) {
-      spend = off.cost; source = 'official';
-    } else if (isToday && observed > 0) {
-      spend = observed; source = 'observed';
-    } else if (off) {
-      spend = off.cost; source = 'official';
-    } else if (rec) {
-      spend = observed; source = 'observed';
-    }
-    if (source === 'official') officialDays++;
-    if (isToday) { todaySource = source; todayObserved = observed; }
-
-    daily.push({
-      label: pad2(d),
-      spend,
-      observed,
-      balance: rec ? rec.balance : null,
-      est: source === 'observed' && !!(rec && rec.est),
-      source,
-      has: source !== 'none',
-    });
-    monthSpend += spend;
-    if (isToday) todaySpend = spend;
+    const c = dayCost(key, rec);
+    daily.push({ label: pad2(d), ...c, balance: rec ? rec.balance : null, has: c.source !== 'none' });
+    monthSpend += c.spend;
+    if (c.source === 'official') officialDays++;
   }
 
   // 分母从"第一天有数据"算到今天；官方数据也能把"页面没打开的那天"补成有数据
   const firstIdx = daily.findIndex(d => d.has);
   const daysCounted = firstIdx >= 0 ? lastDay - firstIdx : 1;
+  const today = daily[daily.length - 1];
+
+  // ---- 最近 7 天：给"短期趋势"用，跨月也能连续 ----
+  const week = [];
+  for (let back = 6; back >= 0; back--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - back);
+    const key = localDate(d.getTime());
+    const c = dayCost(key, perDay.get(key));
+    week.push({ key, spend: c.spend, observed: c.observed, source: c.source, est: c.est, has: c.source !== 'none' });
+  }
 
   return {
-    monthSpend, todaySpend, monthCredit, daily, daysCounted,
-    avgDaily: monthSpend / daysCounted, observedSpend, officialDays, todaySource, todayObserved,
+    monthSpend, monthCredit, daily, week, daysCounted,
+    avgDaily: monthSpend / daysCounted, officialDays,
+    todaySpend: today ? today.spend : 0,
+    todaySource: today ? today.source : 'none',
+    todayObserved: today ? today.observed : 0,
+    // 对账只看"官方覆盖到的那几天"，避免拿不同天数相减
+    observedSpend: daily.reduce((sum, d) => sum + d.observed, 0),
   };
 }
 
-// ===== 图表 =====
-// ===== 图表：今日累计消费（阶梯）=====
-// 余额只有 2 位小数，所以曲线天然是阶梯：每 ¥0.01 一跳。把跳变放在"观测到它的那一刻"，
+// ===== 图表：今天（分钟级累计）/ 近 7 天（每日消费）=====
+// 余额只有 2 位小数，累计曲线天然是阶梯：每 ¥0.01 一跳。把跳变放在"观测到它的那一刻"，
 // 配合前台 1 分钟采样，台阶落点误差约 ±1 分钟。
 const fmtClock = v => {
   const m = Math.round(v);
   return m >= 1440 ? '24:00' : `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
 };
+const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
 function todaySeries() {
   const now = Date.now();
@@ -1171,25 +1438,27 @@ function todaySeries() {
   return { pts, cum, steps, gap, lastAt, nowMin };
 }
 
-function initChart() {
-  if (typeof Chart === 'undefined') {
-    // 离线 / CDN 被拦 / SRI 不匹配时不能让整个页面挂掉
-    setStatus('图表库未加载（离线或被拦截），数据仍可刷新与导出', 'error');
-    return;
-  }
-  todayChart = new Chart(document.getElementById('todayChart').getContext('2d'), {
+const chartCtx = () => document.getElementById('trendCanvas').getContext('2d');
+
+function todayConfig(series) {
+  const maxX = Math.min(1440, Math.max(240, Math.ceil((series.nowMin + 30) / 120) * 120));
+  const firstStep = series.pts.length > 1 ? series.pts[1].x : series.nowMin;
+  const minX = Math.max(0, Math.min(Math.floor((firstStep - 30) / 60) * 60, maxX - 120));
+  const data = series.pts[0] && series.pts[0].x < minX ? [{ x: minX, y: 0 }, ...series.pts.slice(1)] : series.pts;
+
+  return {
     type: 'line',
     data: {
       datasets: [
         {
-          label: '累计消费', data: [], stepped: 'after', fill: true,
+          label: '累计消费', data, stepped: 'after', fill: true,
           borderColor: '#4fdfd0', backgroundColor: 'rgba(79,223,208,0.10)', borderWidth: 2,
           pointRadius: 0, pointHoverRadius: 4, pointBackgroundColor: '#4fdfd0',
           pointBorderColor: '#0b0d0e', pointBorderWidth: 2,
         },
         {
-          label: '官方今日合计', data: [], borderColor: 'rgba(232,163,61,0.9)',
-          borderWidth: 1.4, borderDash: [5, 5], pointRadius: 0, fill: false,
+          label: '官方今日合计', data: series.official ? [{ x: 0, y: series.official }, { x: maxX, y: series.official }] : [],
+          borderColor: 'rgba(232,163,61,0.9)', borderWidth: 1.4, borderDash: [5, 5], pointRadius: 0, fill: false,
         },
       ],
     },
@@ -1212,7 +1481,7 @@ function initChart() {
       },
       scales: {
         x: {
-          type: 'linear', min: 0, max: 1440,
+          type: 'linear', min: minX, max: maxX,
           border: { display: false }, grid: { display: false },
           ticks: { stepSize: 120, color: '#8a9498', font: { size: 10 }, callback: v => fmtClock(v) },
         },
@@ -1223,25 +1492,134 @@ function initChart() {
         },
       },
     },
-  });
+  };
 }
 
-function updateChart(series) {
-  document.getElementById('chartEmpty').hidden = series.pts.length > 1;
-  document.getElementById('legendOfficial').hidden = !series.official;
-  if (!todayChart) return;
+function weekConfig(week) {
+  const label = key => `${Number(key.slice(5, 7))}/${Number(key.slice(8, 10))}`;
+  // 与今日曲线同一套语义：亮薄荷 = 官方口径，暗青 = 观测，近透明 = 当天没有数据
+  const colors = week.map(d =>
+    d.source === 'none' ? 'rgba(255,255,255,0.045)'
+      : d.source === 'official' ? '#4fdfd0' : 'rgba(46,196,182,0.42)');
 
-  // 左右各留半小时余量：右侧不空出半天，左侧不空出"还没开始工作"的整夜
-  const maxX = Math.min(1440, Math.max(240, Math.ceil((series.nowMin + 30) / 120) * 120));
-  const firstStep = series.pts.length > 1 ? series.pts[1].x : series.nowMin;
-  const minX = Math.max(0, Math.min(Math.floor((firstStep - 30) / 60) * 60, maxX - 120));
-  todayChart.options.scales.x.min = minX;
-  todayChart.options.scales.x.max = maxX;
+  return {
+    type: 'bar',
+    data: {
+      labels: week.map(d => label(d.key)),
+      datasets: [{
+        label: '日消费', data: week.map(d => d.spend),
+        backgroundColor: colors, borderWidth: 0, borderRadius: 3, borderSkipped: false,
+        maxBarThickness: 46,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: items => {
+              const d = week[items[0].dataIndex];
+              const wd = WD[new Date(`${d.key}T00:00:00`).getDay()];
+              return `${d.key} ${wd}`;
+            },
+            label: c => {
+              const d = week[c.dataIndex];
+              if (d.source === 'none') return '无数据（页面未打开，也没有官方用量）';
+              const lines = [`消费 ${money(d.spend, store.cur)}`];
+              if (d.source === 'official') {
+                lines.push(`官方口径${d.observed > 0 ? ` · 观测 ${money(d.observed, store.cur)}` : ''}`);
+              } else if (d.est) {
+                lines.push('含跨零点缺口，可能属于前一天');
+              }
+              return lines;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { border: { display: false }, grid: { display: false }, ticks: { color: '#8a9498', font: { size: 10 } } },
+        y: {
+          beginAtZero: true, border: { display: false },
+          grid: { color: 'rgba(255,255,255,0.055)' },
+          ticks: { color: '#8a9498', font: { size: 10 }, callback: v => money(v, store.cur) },
+        },
+      },
+    },
+  };
+}
 
-  const [cum, off] = todayChart.data.datasets;
-  cum.data = series.pts[0].x < minX ? [{ x: minX, y: 0 }, ...series.pts.slice(1)] : series.pts;
-  off.data = series.official ? [{ x: 0, y: series.official }, { x: maxX, y: series.official }] : [];
-  todayChart.update();
+// 切换视图时重建实例（两种图的坐标轴类型不同，直接改配置容易踩坑；一分钟一次的数据更新仍复用实例）
+let chartMode = 'today', builtMode = '', trendChart = null;
+
+function initChart() {
+  if (typeof Chart === 'undefined') {
+    setStatus('图表库未加载（离线或被拦截），数据仍可刷新与导出', 'error');
+  }
+}
+
+function renderLegend(mode, series, week) {
+  const el = document.getElementById('chartLegend');
+  el.replaceChildren();
+  const add = (cls, text) => {
+    const dot = document.createElement('i');
+    dot.className = `dot ${cls}`;
+    const span = document.createElement('span');
+    span.textContent = text;
+    el.append(dot, span);
+  };
+  if (mode === 'today') {
+    add('dot--cum', '累计');
+    if (series.official) add('dot--official', '官方今日合计');
+  } else {
+    // 没有官方用量时不必解释"官方/观测"两种颜色
+    if (week.some(d => d.source === 'official')) add('dot--cum', '官方');
+    add('dot--observed', '观测');
+  }
+}
+
+function setChartMode(mode) {
+  if (mode === chartMode) return;
+  chartMode = mode;
+  document.querySelectorAll('.seg__btn').forEach(b => b.classList.toggle('is-active', b.dataset.mode === mode));
+  render();
+}
+
+function updateChart(m, series) {
+  const empty = chartMode === 'today' ? series.pts.length < 2 : !m.week.some(d => d.has);
+  document.getElementById('chartEmpty').hidden = !empty;
+  document.getElementById('chartEmpty').textContent = chartMode === 'today'
+    ? '今天还没有消费记录 · 页面开始采样后自动绘制'
+    : '最近 7 天还没有记录';
+  renderLegend(chartMode, series, m.week);
+  if (typeof Chart === 'undefined') return;
+
+  // 数据变了才重建（每分钟刷新走 update，切换视图才 destroy + new）
+  if (!trendChart || builtMode !== chartMode) {
+    if (trendChart) { trendChart.destroy(); trendChart = null; }
+    trendChart = new Chart(chartCtx(), chartMode === 'today' ? todayConfig(series) : weekConfig(m.week));
+    builtMode = chartMode;
+    return;
+  }
+
+  if (chartMode === 'today') {
+    const maxX = Math.min(1440, Math.max(240, Math.ceil((series.nowMin + 30) / 120) * 120));
+    const firstStep = series.pts.length > 1 ? series.pts[1].x : series.nowMin;
+    const minX = Math.max(0, Math.min(Math.floor((firstStep - 30) / 60) * 60, maxX - 120));
+    const [cum, off] = trendChart.data.datasets;
+    trendChart.options.scales.x.min = minX;
+    trendChart.options.scales.x.max = maxX;
+    cum.data = series.pts[0] && series.pts[0].x < minX ? [{ x: minX, y: 0 }, ...series.pts.slice(1)] : series.pts;
+    off.data = series.official ? [{ x: 0, y: series.official }, { x: maxX, y: series.official }] : [];
+  } else {
+    const week = m.week;
+    trendChart.data.labels = week.map(d => `${Number(d.key.slice(5, 7))}/${Number(d.key.slice(8, 10))}`);
+    trendChart.data.datasets[0].data = week.map(d => d.spend);
+    trendChart.data.datasets[0].backgroundColor = week.map(d =>
+      d.source === 'none' ? 'rgba(255,255,255,0.045)'
+        : d.source === 'official' ? '#4fdfd0' : 'rgba(46,196,182,0.42)');
+  }
+  trendChart.update();
 }
 
 // ===== 渲染 =====
@@ -1294,6 +1672,7 @@ function render(info) {
   const series = todaySeries();
   const offToday = officialDay(localDate(Date.now()));
   if (offToday) series.official = offToday.cost;
+
   document.getElementById('todayConsumeSub').textContent = m.todaySource === 'official'
     ? (m.todayObserved > 0
       ? `官方口径 · 页面观测到 ${money(m.todayObserved, cur)}`
@@ -1307,7 +1686,7 @@ function render(info) {
   else document.getElementById('avgDaily').textContent = '—';
   document.getElementById('avgDailySub').textContent = avgNote(m, total, cur);
 
-  updateChart(series);
+  updateChart(m, series);
   document.getElementById('pollNote').textContent = pollInterval() / 60000;
   updatePeak();
   renderUsage(m);
@@ -1768,6 +2147,7 @@ async function importUsageFiles(files) {
     return;
   }
   commitUsage();
+  labelAccountFromCsv(imported);
   render();   // 官方日成本会合并进主数据，主卡与图表要一起重算
 
   const mergedNow = imported.filter(b => b.cur === store.cur).length;
@@ -1795,6 +2175,21 @@ function deleteUsageBatch(id) {
     render();
     setStatus('已撤销删除');
   });
+}
+
+// 官方 CSV 里有 user_id 与 api_key_name，是唯一能跨设备识别的账户线索：
+// 当前档案还没名字时就用它命名，已经标过的保持一致，不擅自覆盖用户改过的名字。
+function labelAccountFromCsv(batches) {
+  const tag = batches.map(b => b.userId).find(Boolean);
+  if (!tag) return;
+  if (!store.userTag) {
+    store.userTag = tag;
+    if (!store.name) store.name = tag.length > 24 ? `${tag.slice(0, 23)}…` : tag;
+    saveAccounts();
+    renderAccounts();
+  } else if (store.userTag !== tag) {
+    setStatus(`注意：这份 CSV 属于另一个账户（${tag}），别和当前账户混算`, 'error');
+  }
 }
 
 function clearUsage() {
