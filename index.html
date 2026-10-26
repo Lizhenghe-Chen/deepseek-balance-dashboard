@@ -816,11 +816,11 @@
 
   <section class="block">
     <div class="block__head">
-      <h2 class="block__title" id="trendTitle">消费趋势</h2>
+      <h2 class="block__title" id="trendTitle">余额趋势</h2>
       <span class="block__side">
         <span class="zoom" role="group" aria-label="趋势类型">
-          <button class="zoom__btn seg__btn is-on" id="viewSpend" onclick="setChartView('spend')" aria-pressed="true">消费</button>
-          <button class="zoom__btn seg__btn" id="viewBalance" onclick="setChartView('balance')" aria-pressed="false">余额</button>
+          <button class="zoom__btn seg__btn" id="viewSpend" onclick="setChartView('spend')" aria-pressed="false">消费</button>
+          <button class="zoom__btn seg__btn is-on" id="viewBalance" onclick="setChartView('balance')" aria-pressed="true">余额</button>
         </span>
         <span class="zoom" role="group" aria-label="时间跨度">
           <button class="zoom__btn" id="zoomOut" onclick="zoomChart(2)" title="放大时间跨度" aria-label="放大时间跨度">−</button>
@@ -830,7 +830,7 @@
       </span>
     </div>
     <p class="trend__meta" id="trendMeta" hidden></p>
-    <div class="canvas-box"><canvas id="trendCanvas" role="img" aria-label="消费趋势曲线"></canvas><p class="chart-empty" id="chartEmpty">还没有采样数据 · 页面开始采样后自动绘制</p></div>
+    <div class="canvas-box"><canvas id="trendCanvas" role="img" aria-label="余额趋势曲线"></canvas><p class="chart-empty" id="chartEmpty">还没有采样数据 · 页面开始采样后自动绘制</p></div>
   </section>
 
   <section class="block" id="usageBlock">
@@ -1523,7 +1523,7 @@ const DAY = 24 * HOUR;
 const SAMPLE_MODE_MAX = 30 * HOUR;
 const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 const VIEW_SLOT = 'ds_chart_view';
-const readView = () => { try { return localStorage.getItem(VIEW_SLOT) === 'balance' ? 'balance' : 'spend'; } catch { return 'spend'; } };
+const readView = () => { try { return localStorage.getItem(VIEW_SLOT) === 'spend' ? 'spend' : 'balance'; } catch { return 'balance'; } };
 let viewWindow = 0;          // 0 = 全部
 let chartView = readView();  // 'spend' 累计消费 / 'balance' 余额
 let builtKey = '';           // 视图 + 粒度，任一变化都要重建实例
@@ -1654,14 +1654,25 @@ function trendSeries() {
   return daily ? dailySeries(from, now) : sampleSeries(from, now);
 }
 
-// 余额轴不从 0 起：按数据区间留 15% 余量，避免几百元的波动被压成一条直线
+// 轴刻度取 1/2/5×10ⁿ 的整数档：既避免 ¥169.61 这种怪刻度，也不会让余额贴着边框
+function niceStep(raw) {
+  const pow = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1e-6))));
+  const n = raw / pow;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * pow;
+}
+
+// 余额轴不从 0 起：按数据波动留白（封顶余额的 4%），再把上下界对齐到整刻度
 function balanceBounds(pts) {
-  if (!pts.length) return { min: undefined, max: undefined };
+  if (!pts.length) return { min: undefined, max: undefined, step: undefined };
   const vals = pts.map(p => p.y);
   const lo = Math.min(...vals), hi = Math.max(...vals);
-  // 留白按数据波动给，但不超过余额的 4%：一次大额充值不该把曲线压成一条缝
   const pad = Math.min(Math.max((hi - lo) * 0.12, 0.02), Math.max(hi * 0.04, 0.02));
-  return { min: +Math.max(0, lo - pad).toFixed(2), max: +(hi + pad).toFixed(2) };
+  const step = niceStep(Math.max((hi - lo + pad * 2) / 4, 0.01));
+  return {
+    min: +Math.max(0, Math.floor((lo - pad) / step) * step).toFixed(2),
+    max: +(Math.ceil((hi + pad) / step) * step).toFixed(2),
+    step,
+  };
 }
 
 function tickStep(mode, pts) {
@@ -1749,7 +1760,10 @@ function trendConfig(series) {
           beginAtZero: !isBal, min: isBal ? bounds.min : undefined, max: isBal ? bounds.max : undefined,
           border: { display: false },
           grid: { color: 'rgba(255,255,255,0.055)' },
-          ticks: { color: '#8a9498', font: { size: 10 }, callback: v => money(v, store.cur) },
+          ticks: {
+            color: '#8a9498', font: { size: 10 }, callback: v => money(v, store.cur),
+            stepSize: isBal ? bounds.step : undefined,
+          },
         },
       },
     },
@@ -1844,8 +1858,10 @@ function updateChart(m, series) {
   xs.ticks.stepSize = tickStep(series.mode, series.pts);
   if (isBal) {
     const b = balanceBounds(series.pts);
-    trendChart.options.scales.y.min = b.min;
-    trendChart.options.scales.y.max = b.max;
+    const ys = trendChart.options.scales.y;
+    ys.min = b.min;
+    ys.max = b.max;
+    ys.ticks.stepSize = b.step;
   }
   trendChart.update();
 }
@@ -2767,6 +2783,7 @@ purgeLegacyKey();
 initChart();
 bindUsageDrop();
 renderUsage();
+renderViewSwitch();
 updatePeak();
 const startKey = getKey();
 migrateLegacyHistory(startKey);
