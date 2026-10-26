@@ -9,6 +9,8 @@
 ![backend](https://img.shields.io/badge/backend-none-success)
 ![purpose](https://img.shields.io/badge/purpose-balance%20%26%20spend-58a6ff)
 
+[**🌐 在线打开**](https://lizhenghe-chen.github.io/deepseek-balance-dashboard/) · 无需克隆
+
 </div>
 
 ![界面预览](docs/screenshot.png)
@@ -32,6 +34,12 @@
 
 ## 🚀 快速开始
 
+**方式一：直接访问在线版**（推荐）
+
+<https://lizhenghe-chen.github.io/deepseek-balance-dashboard/>
+
+**方式二：克隆到本地**
+
 ```bash
 git clone https://github.com/Lizhenghe-Chen/deepseek-balance-dashboard.git
 ```
@@ -40,7 +48,32 @@ git clone https://github.com/Lizhenghe-Chen/deepseek-balance-dashboard.git
 2. 在弹出的窗口里填入 API Key（`sk-` 开头，[在这里创建](https://platform.deepseek.com/api_keys)）
 3. 保存即可看到余额与图表
 
-> 也可以丢进任意静态站点托管，行为完全一致；用 `python -m http.server` 之类的本地服务器打开同样可以。
+> 用 `python -m http.server` 之类的本地服务器打开同样可以。
+
+两种方式功能完全一致。数据全部保存在**你自己的浏览器**里：在线版与本地版属于不同来源（origin），历史互不相通，跨设备 / 跨浏览器请用导出 / 导入 JSON 迁移。
+
+## 🌐 部署到 GitHub Pages
+
+本仓库本身就是可直接托管的静态站点（根目录 `index.html` + `.nojekyll`），没有构建步骤：
+
+1. 仓库 → **Settings** → **Pages**
+2. **Source** 选 **Deploy from a branch**，分支 `main`，目录 `/ (root)`，保存
+3. 约一分钟后访问 `https://<用户名>.github.io/<仓库名>/`；之后每次 `git push` 自动重新发布
+
+`.nojekyll` 让 Pages 跳过 Jekyll 处理，文件按原样发布。
+
+浏览器能否直连 DeepSeek：已实测该接口对 `https://<用户名>.github.io` 来源的预检请求回显 `Access-Control-Allow-Origin` 并允许 `Authorization` 头，因此 Pages 版可以直接调用，无需任何代理或后端。
+
+### 公开托管时需要注意的三点
+
+- **站点是公开的，但数据不是**。任何人打开这个网址看到的都是同一份前端代码，各自拥有属于自己的浏览器本地数据；仓库和页面里没有任何密钥。
+- **同账号的 Pages 站点共享一个 origin**。`https://<用户名>.github.io` 是一个 origin，而 `localStorage` / `sessionStorage` 只按 origin 隔离、不按仓库隔离，因此：
+  - 余额历史（`ds_history_v2`）理论上可被你名下其他 Pages 页面读到——内容只有余额快照，不含 Key；
+  - API Key 存在 `sessionStorage`（仅当前标签页、关闭即清除），但如果你在**同一标签页**里跳转到该 origin 下的其他页面，对方在这次会话中可以看到它。
+  - 介意的话：给 Pages 绑定自定义域名（独立 origin），或避免在同一标签页访问该账号下的其他 Pages 页面。
+- **必须走 HTTPS**。Pages 默认提供；页面自带的 CSP 只放行 `api.deepseek.com`，即便页面被注入也无法把 Key 发往别处。同时输入框已关闭自动填充，避免浏览器把这个 key 当成密码保存到站点上。
+
+> 也可以部署到 Cloudflare Pages / Netlify / Vercel 等任意静态托管，行为一致。
 
 ## 🔐 隐私与安全
 
@@ -51,6 +84,7 @@ git clone https://github.com/Lizhenghe-Chen/deepseek-balance-dashboard.git
 | 有第三方脚本吗？ | 只有 Chart.js（jsDelivr CDN，带 SRI 完整性校验）；可用 CSP 外联白名单限制到只允许 DeepSeek 域名 |
 | 历史数据在哪？ | 浏览器 `localStorage` 的 `ds_history_v2` 键，只有余额快照，不含 Key |
 | 会泄露给其他网页吗？ | 页面带 `Content-Security-Policy`，`connect-src` 仅放行 `api.deepseek.com`，即便被注入也无法把数据发去别处 |
+| 公开托管会泄露 Key 吗？ | 不会。公开的只是前端代码，托管服务器接触不到你的 Key——它只存在于你浏览器的内存与 `sessionStorage` 里 |
 
 历史里保存的是 Key 的 **djb2 指纹**（用于区分不同账号），不是 Key 本身。
 
@@ -131,6 +165,7 @@ git clone https://github.com/Lizhenghe-Chen/deepseek-balance-dashboard.git
 ├── index.html        # 全部实现：HTML + CSS + JS（单文件）
 ├── docs/
 │   └── screenshot.png
+├── .nojekyll         # 让 GitHub Pages 原样发布，跳过 Jekyll
 ├── .gitignore
 ├── LICENSE
 └── README.md

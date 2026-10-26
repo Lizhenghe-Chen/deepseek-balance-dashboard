@@ -205,7 +205,7 @@
     <p>在 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com/api_keys</a> 创建并复制你的 API Key。</p>
     <p class="sheet__note">Key 仅保存在当前标签页（关闭标签页即清除），不会上传到任何服务器。</p>
     <label class="sheet__field" for="apiKeyInput">DeepSeek API Key</label>
-    <input type="password" id="apiKeyInput" class="sheet__input" placeholder="sk-...">
+    <input type="password" id="apiKeyInput" class="sheet__input" placeholder="sk-..." autocomplete="off" spellcheck="false">
     <div class="sheet__row">
       <button class="btn-text" onclick="clearKey()">清除并退出</button>
       <button class="btn-solid" onclick="saveKey()">保存</button>
