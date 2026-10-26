@@ -244,19 +244,25 @@
   .dot--cum { background: #4fdfd0; }
   .dot--observed { background: rgba(46, 196, 182, 0.42); }
   .dot--official { width: 12px; height: 2px; border-radius: 1px; background: rgba(232, 163, 61, 0.9); }
-  .seg { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
-  .seg__btn {
-    padding: 3px 11px;
-    font: 500 0.74rem/1.4 var(--sans);
-    color: var(--ink-3);
-    background: none;
-    border: 0;
-    border-radius: 999px;
-    cursor: pointer;
+  .zoom {
+    display: inline-flex; align-items: center; gap: 2px;
+    padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  }
+  .zoom__btn {
+    min-width: 26px; height: 24px; padding: 0 7px;
+    font: 500 0.74rem/1 var(--sans); color: var(--ink-3);
+    background: none; border: 0; border-radius: 999px; cursor: pointer;
     transition: color 0.16s var(--ease), background-color 0.16s var(--ease);
   }
-  .seg__btn:hover { color: var(--ink-2); }
-  .seg__btn.is-active { color: var(--accent-ink); background: var(--accent); }
+  .zoom__btn:hover:not(:disabled) { color: var(--ink); background: var(--surface-2); }
+  .zoom__btn:disabled { opacity: 0.35; cursor: default; }
+  .zoom__btn--span {
+    min-width: 0; padding: 0 10px;
+    font-variant-numeric: tabular-nums; color: var(--ink-2);
+  }
+  .zoom__btn--span:hover { color: var(--ink); }
+  .trend__meta { margin: -6px 0 10px; font-size: 0.73rem; color: var(--ink-3); }
+  .trend__meta[hidden] { display: none; }
   .canvas-box { position: relative; width: 100%; height: 320px; }
   .chart-empty {
     position: absolute;
@@ -460,7 +466,12 @@
   .btn--ghost:hover { border-color: var(--line-2); background: var(--surface-2); color: var(--ink); }
   .btn--danger { border: 1px solid var(--line); background: transparent; color: var(--ink-3); }
   .btn--danger:hover { border-color: rgba(204, 106, 99, 0.4); color: var(--bad); }
-  @media (pointer: coarse) { .btn { height: 42px; } }
+  /* 触屏 / 无 hover 设备：把点击面积放大到能稳稳点中（缩放键很容易误触） */
+  @media (pointer: coarse), (hover: none) {
+    .btn { height: 42px; }
+    .zoom__btn { min-width: 38px; height: 34px; font-size: 0.85rem; }
+    .zoom__btn--span { padding: 0 14px; }
+  }
 
   /* ── 设置面板 ────────────────────────────────────────── */
   .sheet {
@@ -576,7 +587,8 @@
   .acc__del[data-armed] { color: var(--bad); border-color: rgba(239, 107, 98, 0.6); }
 
   .sheet__alert { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
-  .alert-row { display: flex; align-items: center; gap: 8px; }
+  .alert-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .alert-row .sheet__input--num { flex: 1 1 88px; min-width: 0; }
   .link-btn {
     padding: 0;
     border: none;
@@ -626,7 +638,20 @@
     .usage__file-main { flex-basis: 100%; }
     .usage__file-meta { white-space: normal; }
     .usage__file-del { margin-left: auto; }
-    .block__legend { order: 2; }
+    /* 窄屏：标题独占一行，图例靠左、缩放靠右各就各位，不和标题抢宽度 */
+    .block__head { row-gap: 8px; }
+    .block__side { width: 100%; justify-content: space-between; }
+    .block__legend { order: 1; }
+    .zoom { order: 2; }
+    .trend__meta { margin-top: -2px; }
+    #usageBlock .block__side { justify-content: space-between; }
+    /* 设置面板：窄屏收紧内边距，账户行允许换行，避免"删除"被挤出屏幕 */
+    .sheet__box { padding: 20px 16px 18px; }
+    .acc { flex-wrap: wrap; row-gap: 6px; }
+    .acc__main { flex-basis: 100%; }
+    .acc__meta { white-space: normal; }
+    .acc__del { margin-left: auto; }
+    .alert-row .btn { flex: 1 1 auto; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -740,13 +765,15 @@
       <h2 class="block__title">消费趋势</h2>
       <span class="block__side">
         <span class="block__meta block__legend" id="chartLegend" aria-hidden="true"></span>
-        <span class="seg" role="group" aria-label="趋势跨度">
-          <button class="seg__btn is-active" data-mode="today" onclick="setChartMode('today')">今天</button>
-          <button class="seg__btn" data-mode="week" onclick="setChartMode('week')">7 天</button>
+        <span class="zoom" role="group" aria-label="时间跨度">
+          <button class="zoom__btn" id="zoomOut" onclick="zoomChart(2)" title="放大时间跨度" aria-label="放大时间跨度">−</button>
+          <button class="zoom__btn zoom__btn--span" id="zoomLabel" onclick="zoomChart(0)" title="点击回到全部数据">全部</button>
+          <button class="zoom__btn" id="zoomIn" onclick="zoomChart(0.5)" title="缩小时间跨度，看得更细" aria-label="缩小时间跨度">＋</button>
         </span>
       </span>
     </div>
-    <div class="canvas-box"><canvas id="trendCanvas" role="img" aria-label="消费趋势曲线"></canvas><p class="chart-empty" id="chartEmpty">今天还没有消费记录 · 页面开始采样后自动绘制</p></div>
+    <p class="trend__meta" id="trendMeta" hidden></p>
+    <div class="canvas-box"><canvas id="trendCanvas" role="img" aria-label="消费趋势曲线"></canvas><p class="chart-empty" id="chartEmpty">还没有采样数据 · 页面开始采样后自动绘制</p></div>
   </section>
 
   <section class="block" id="usageBlock">
@@ -1340,27 +1367,31 @@ function dayCost(key, rec) {
   return { spend: observed, observed, source: rec ? 'observed' : 'none', est: !!(rec && rec.est) };
 }
 
-function analyze(samples) {
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-  const todayStr = localDate(now.getTime());
+// 相邻样本求差，按本地日期归集；跨日界且余额确实变了，才标记"这笔归属不确定"
+function perDayMap(samples) {
   const perDay = new Map();
-  let monthCredit = 0;
-
   for (let i = 1; i < samples.length; i++) {
     const prev = samples[i - 1], cur = samples[i];
     const day = localDate(cur.t);
     const delta = +(cur.b - prev.b).toFixed(2);
-    const rec = perDay.get(day) || { spend: 0, credit: 0, est: false, balance: cur.b };
-    // 跨越日界且余额确实变了，才无法确定这笔变动属于哪一天
+    const rec = perDay.get(day) || { spend: 0, credit: 0, est: false, balance: cur.b, t: cur.t };
     if (delta !== 0 && localDate(prev.t) !== day) rec.est = true;
     rec.balance = cur.b;
+    rec.t = cur.t;
     if (delta < 0) rec.spend -= delta;
-    else if (delta > 0) {
-      rec.credit += delta;
-      if (cur.t >= monthStart) monthCredit += delta;
-    }
+    else if (delta > 0) rec.credit += delta;
     perDay.set(day, rec);
+  }
+  return perDay;
+}
+
+function analyze(samples) {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const perDay = perDayMap(samples);
+  let monthCredit = 0;
+  for (const [day, rec] of perDay) {
+    if (rec.credit && day >= localDate(monthStart)) monthCredit += rec.credit;
   }
 
   // ---- 本月：日历轴 + 合计 / 日均 / 官方覆盖天数 ----
@@ -1402,27 +1433,51 @@ function analyze(samples) {
   };
 }
 
-// ===== 图表：今天（分钟级累计）/ 近 7 天（每日消费）=====
-// 余额只有 2 位小数，累计曲线天然是阶梯：每 ¥0.01 一跳。把跳变放在"观测到它的那一刻"，
-// 配合前台 1 分钟采样，台阶落点误差约 ±1 分钟。
-const fmtClock = v => {
-  const m = Math.round(v);
-  return m >= 1440 ? '24:00' : `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
-};
+// ===== 图表：消费趋势（跨度自适应 + 可缩放）=====
+// 默认只画"数据实际覆盖的范围"，不做固定一周；窗口 ≤30 小时用采样级（分钟定位），
+// 更长则按天阶梯（每天的数取官方优先的最终值）。缩放以"现在"为右端，− 放大跨度、＋ 收窄。
+const MIN_WINDOW_MS = 2 * 3600 * 1000;
+const HOUR = 3600 * 1000;
+const DAY = 24 * HOUR;
+const SAMPLE_MODE_MAX = 30 * HOUR;
 const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+let viewWindow = 0;          // 0 = 全部
+let builtMode = '';
+let trendChart = null;
 
-function todaySeries() {
-  const now = Date.now();
-  const d = new Date(now);
-  const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const toMin = t => (t - dayStart) / 60000;
-  const nowMin = +toMin(now).toFixed(2);
-  const pts = [{ x: 0, y: 0 }];
+const startOfDay = t => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+const hm = t => { const d = new Date(t); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+const md = t => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()}`; };
+
+function dataSpan() {
+  if (!store.s.length) return 0;
+  return Math.max(60 * 1000, Date.now() - store.s[0].t);
+}
+
+function currentWindow() {
+  const full = dataSpan();
+  if (!full) return MIN_WINDOW_MS;
+  if (!viewWindow) return full;
+  return Math.min(full, Math.max(MIN_WINDOW_MS, viewWindow));
+}
+
+// 窗口文案：全部 / 近 N 小时 / 近 N 天
+function windowLabel(win) {
+  const full = dataSpan();
+  if (!full) return '无数据';
+  if (!viewWindow || win >= full) {
+    return full <= SAMPLE_MODE_MAX ? `全部 ${Math.max(1, Math.round(full / HOUR))} 小时` : `全部 ${Math.ceil(full / DAY)} 天`;
+  }
+  return win <= SAMPLE_MODE_MAX ? `近 ${Math.max(1, Math.round(win / HOUR))} 小时` : `近 ${Math.round(win / DAY)} 天`;
+}
+
+// 采样级：窗口内的累计消费台阶，定位到"观测到它的那一刻"
+function sampleSeries(from, now) {
+  const pts = [{ x: from, y: 0 }];
   let cum = 0, steps = 0, gap = false, lastAt = 0;
-
   const s = store.s;
-  const first = s.findIndex(e => e.t >= dayStart);
-  if (first < 0) return { pts: [], cum: 0, steps: 0, gap: false, lastAt: 0, nowMin };
+  const first = s.findIndex(e => e.t >= from);
+  if (first < 0) return { pts: [], cum: 0, steps: 0, gap: false, lastAt: 0, from, now, mode: 'sample' };
 
   for (let i = Math.max(first, 1); i < s.length; i++) {
     const delta = +(s[i].b - s[i - 1].b).toFixed(2);
@@ -1430,37 +1485,63 @@ function todaySeries() {
     cum = +(cum - delta).toFixed(2);
     steps++;
     lastAt = s[i].t;
-    // 前一次采样离零点太远，说明那一笔可能包含隔夜消费，无法定位到具体时刻
-    if (s[i - 1].t < dayStart - 5 * 60000) gap = true;
-    pts.push({ x: +toMin(s[i].t).toFixed(2), y: cum, step: -delta });
+    if (s[i - 1].t < from - 5 * 60000) gap = true;  // 窗口前那一段无法定位
+    pts.push({ x: s[i].t, y: cum, step: -delta });
   }
-  if (nowMin > pts[pts.length - 1].x) pts.push({ x: nowMin, y: cum, tail: true });
-  return { pts, cum, steps, gap, lastAt, nowMin };
+  if (now > pts[pts.length - 1].x) pts.push({ x: now, y: cum, tail: true });
+  return { pts, cum, steps, gap, lastAt, from, now, mode: 'sample' };
 }
 
-const chartCtx = () => document.getElementById('trendCanvas').getContext('2d');
+// 按天：每天一级台阶，取官方优先的最终值；窗口对齐到本地零点，避免"半天"混进来
+function dailySeries(from, now) {
+  const perDay = perDayMap(store.s);
+  const first = startOfDay(from);
+  const last = startOfDay(now);
+  const pts = [];
+  let cum = 0, officialDays = 0, has = 0;
 
-function todayConfig(series) {
-  const maxX = Math.min(1440, Math.max(240, Math.ceil((series.nowMin + 30) / 120) * 120));
-  const firstStep = series.pts.length > 1 ? series.pts[1].x : series.nowMin;
-  const minX = Math.max(0, Math.min(Math.floor((firstStep - 30) / 60) * 60, maxX - 120));
-  const data = series.pts[0] && series.pts[0].x < minX ? [{ x: minX, y: 0 }, ...series.pts.slice(1)] : series.pts;
+  for (let t = first; t <= last; t = startOfDay(t + DAY + HOUR)) {
+    const c = dayCost(localDate(t), perDay.get(localDate(t)));
+    cum = +(cum + c.spend).toFixed(2);
+    if (c.source === 'official') officialDays++;
+    if (c.source !== 'none') has++;
+    pts.push({ x: t, y: cum, day: c.spend, source: c.source, est: c.est, observed: c.observed });
+  }
+  return { pts, cum, days: pts.length, has, officialDays, from: first, now, mode: 'daily' };
+}
 
+function trendSeries() {
+  const win = currentWindow();
+  const now = Date.now();
+  if (win <= SAMPLE_MODE_MAX) return sampleSeries(now - win, now);
+  const days = Math.max(2, Math.ceil(win / DAY));
+  return dailySeries(startOfDay(now) - (days - 1) * DAY, now);
+}
+
+function tickStep(mode, pts) {
+  if (mode === 'daily') {
+    const n = pts.length;
+    return n <= 5 ? DAY : n <= 10 ? 2 * DAY : Math.ceil(n / 6) * DAY;
+  }
+  const span = pts.length ? pts[pts.length - 1].x - pts[0].x : HOUR;
+  if (span <= 3 * HOUR) return 30 * 60000;
+  if (span <= 10 * HOUR) return HOUR;
+  return 3 * HOUR;
+}
+
+const fmtTick = (v, mode) => (mode === 'daily' ? md(v) : hm(v));
+
+function trendConfig(series) {
+  const mode = series.mode;
   return {
     type: 'line',
     data: {
-      datasets: [
-        {
-          label: '累计消费', data, stepped: 'after', fill: true,
-          borderColor: '#4fdfd0', backgroundColor: 'rgba(79,223,208,0.10)', borderWidth: 2,
-          pointRadius: 0, pointHoverRadius: 4, pointBackgroundColor: '#4fdfd0',
-          pointBorderColor: '#0b0d0e', pointBorderWidth: 2,
-        },
-        {
-          label: '官方今日合计', data: series.official ? [{ x: 0, y: series.official }, { x: maxX, y: series.official }] : [],
-          borderColor: 'rgba(232,163,61,0.9)', borderWidth: 1.4, borderDash: [5, 5], pointRadius: 0, fill: false,
-        },
-      ],
+      datasets: [{
+        label: '累计消费', data: series.pts, stepped: 'after', fill: true,
+        borderColor: '#4fdfd0', backgroundColor: 'rgba(79,223,208,0.10)', borderWidth: 2,
+        pointRadius: 0, pointHoverRadius: 4, pointBackgroundColor: '#4fdfd0',
+        pointBorderColor: '#0b0d0e', pointBorderWidth: 2,
+      }],
     },
     options: {
       responsive: true, maintainAspectRatio: false,
@@ -1468,11 +1549,22 @@ function todayConfig(series) {
       plugins: {
         legend: { display: false },          // 图例由标题右侧承担
         tooltip: {
-          filter: item => item.datasetIndex === 0,
           callbacks: {
-            title: items => fmtClock(items[0].parsed.x),
+            title: items => {
+              const t = items[0].parsed.x;
+              return mode === 'daily'
+                ? `${md(t)} ${WD[new Date(t).getDay()]}`
+                : `${md(t)} ${hm(t)}`;
+            },
             label: c => {
               const p = c.raw;
+              if (mode === 'daily') {
+                if (p.source === 'none') return '无数据（页面未打开，也没有官方用量）';
+                const lines = [`当天 ${money(p.day, store.cur)}`, `累计 ${money(p.y, store.cur)}`];
+                if (p.source === 'official') lines.push(`官方口径${p.observed > 0 ? ` · 观测 ${money(p.observed, store.cur)}` : ''}`);
+                else if (p.est) lines.push('含跨零点缺口，可能属于前一天');
+                return lines;
+              }
               if (p.tail) return `累计 ${money(p.y, store.cur)} · 之后暂无消费`;
               return [`累计 ${money(p.y, store.cur)}`, `这一步 +${money(p.step, store.cur)}`];
             },
@@ -1481,64 +1573,16 @@ function todayConfig(series) {
       },
       scales: {
         x: {
-          type: 'linear', min: minX, max: maxX,
+          type: 'linear',
+          min: series.pts.length ? series.pts[0].x : undefined,
+          max: series.pts.length ? Math.max(series.now, series.pts[series.pts.length - 1].x) : undefined,
           border: { display: false }, grid: { display: false },
-          ticks: { stepSize: 120, color: '#8a9498', font: { size: 10 }, callback: v => fmtClock(v) },
-        },
-        y: {
-          beginAtZero: true, border: { display: false },
-          grid: { color: 'rgba(255,255,255,0.055)' },
-          ticks: { color: '#8a9498', font: { size: 10 }, callback: v => money(v, store.cur) },
-        },
-      },
-    },
-  };
-}
-
-function weekConfig(week) {
-  const label = key => `${Number(key.slice(5, 7))}/${Number(key.slice(8, 10))}`;
-  // 与今日曲线同一套语义：亮薄荷 = 官方口径，暗青 = 观测，近透明 = 当天没有数据
-  const colors = week.map(d =>
-    d.source === 'none' ? 'rgba(255,255,255,0.045)'
-      : d.source === 'official' ? '#4fdfd0' : 'rgba(46,196,182,0.42)');
-
-  return {
-    type: 'bar',
-    data: {
-      labels: week.map(d => label(d.key)),
-      datasets: [{
-        label: '日消费', data: week.map(d => d.spend),
-        backgroundColor: colors, borderWidth: 0, borderRadius: 3, borderSkipped: false,
-        maxBarThickness: 46,
-      }],
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            title: items => {
-              const d = week[items[0].dataIndex];
-              const wd = WD[new Date(`${d.key}T00:00:00`).getDay()];
-              return `${d.key} ${wd}`;
-            },
-            label: c => {
-              const d = week[c.dataIndex];
-              if (d.source === 'none') return '无数据（页面未打开，也没有官方用量）';
-              const lines = [`消费 ${money(d.spend, store.cur)}`];
-              if (d.source === 'official') {
-                lines.push(`官方口径${d.observed > 0 ? ` · 观测 ${money(d.observed, store.cur)}` : ''}`);
-              } else if (d.est) {
-                lines.push('含跨零点缺口，可能属于前一天');
-              }
-              return lines;
-            },
+          ticks: {
+            color: '#8a9498', font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 7,
+            stepSize: tickStep(mode, series.pts),
+            callback: v => fmtTick(v, mode),
           },
         },
-      },
-      scales: {
-        x: { border: { display: false }, grid: { display: false }, ticks: { color: '#8a9498', font: { size: 10 } } },
         y: {
           beginAtZero: true, border: { display: false },
           grid: { color: 'rgba(255,255,255,0.055)' },
@@ -1548,9 +1592,6 @@ function weekConfig(week) {
     },
   };
 }
-
-// 切换视图时重建实例（两种图的坐标轴类型不同，直接改配置容易踩坑；一分钟一次的数据更新仍复用实例）
-let chartMode = 'today', builtMode = '', trendChart = null;
 
 function initChart() {
   if (typeof Chart === 'undefined') {
@@ -1558,67 +1599,78 @@ function initChart() {
   }
 }
 
-function renderLegend(mode, series, week) {
-  const el = document.getElementById('chartLegend');
-  el.replaceChildren();
-  const add = (cls, text) => {
-    const dot = document.createElement('i');
-    dot.className = `dot ${cls}`;
-    const span = document.createElement('span');
-    span.textContent = text;
-    el.append(dot, span);
-  };
-  if (mode === 'today') {
-    add('dot--cum', '累计');
-    if (series.official) add('dot--official', '官方今日合计');
+// 缩放：factor > 1 放大跨度，< 1 收窄；0 表示回到"全部"
+function zoomChart(factor) {
+  const full = dataSpan();
+  if (!full) return;
+  if (!factor) {
+    viewWindow = 0;
   } else {
-    // 没有官方用量时不必解释"官方/观测"两种颜色
-    if (week.some(d => d.source === 'official')) add('dot--cum', '官方');
-    add('dot--observed', '观测');
+    const next = currentWindow() * factor;
+    viewWindow = next >= full ? 0 : Math.max(MIN_WINDOW_MS, Math.min(next, full));
   }
-}
-
-function setChartMode(mode) {
-  if (mode === chartMode) return;
-  chartMode = mode;
-  document.querySelectorAll('.seg__btn').forEach(b => b.classList.toggle('is-active', b.dataset.mode === mode));
   render();
 }
 
+function renderLegend(series) {
+  const el = document.getElementById('chartLegend');
+  el.replaceChildren();
+  const dot = document.createElement('i');
+  dot.className = 'dot dot--cum';
+  const span = document.createElement('span');
+  span.textContent = '累计';
+  el.append(dot, span);
+}
+
 function updateChart(m, series) {
-  const empty = chartMode === 'today' ? series.pts.length < 2 : !m.week.some(d => d.has);
+  const win = currentWindow();
+  const empty = !series.pts.length || !(series.mode === 'daily' ? series.has : series.cum > 0);
   document.getElementById('chartEmpty').hidden = !empty;
-  document.getElementById('chartEmpty').textContent = chartMode === 'today'
-    ? '今天还没有消费记录 · 页面开始采样后自动绘制'
-    : '最近 7 天还没有记录';
-  renderLegend(chartMode, series, m.week);
+  document.getElementById('chartEmpty').textContent = dataSpan()
+    ? '这段时间还没有消费记录'
+    : '还没有采样数据 · 页面开始采样后自动绘制';
+  renderLegend(series);
+
+  const label = document.getElementById('zoomLabel');
+  if (label) {
+    label.textContent = windowLabel(win);
+    label.title = '点击回到全部数据';
+  }
+  // 已经是最小/最大跨度时，把按钮显示为不可用，避免点了没反应
+  const full = dataSpan();
+  const btnOut = document.getElementById('zoomOut');
+  const btnIn = document.getElementById('zoomIn');
+  if (btnOut) btnOut.disabled = !full || win >= full;
+  if (btnIn) btnIn.disabled = !full || win <= MIN_WINDOW_MS;
+
+  const meta = document.getElementById('trendMeta');
+  if (meta) {
+    const bits = [];
+    if (series.mode === 'daily') {
+      if (series.officialDays) bits.push(`其中 ${series.officialDays} 天取自官方用量`);
+    } else if (series.steps) {
+      bits.push(`每 ${money(0.01, store.cur)} 一档 · ${series.steps} 笔`);
+      if (series.gap) bits.push('起点含隔夜缺口');
+    }
+    meta.textContent = bits.join(' · ');
+    meta.hidden = !bits.length;
+  }
+
   if (typeof Chart === 'undefined') return;
 
-  // 数据变了才重建（每分钟刷新走 update，切换视图才 destroy + new）
-  if (!trendChart || builtMode !== chartMode) {
+  // 采样级与按天级的坐标轴规则不同，模式变化时重建实例；同一模式内只更新数据
+  if (!trendChart || builtMode !== series.mode) {
     if (trendChart) { trendChart.destroy(); trendChart = null; }
-    trendChart = new Chart(chartCtx(), chartMode === 'today' ? todayConfig(series) : weekConfig(m.week));
-    builtMode = chartMode;
+    trendChart = new Chart(document.getElementById('trendCanvas').getContext('2d'), trendConfig(series));
+    builtMode = series.mode;
     return;
   }
-
-  if (chartMode === 'today') {
-    const maxX = Math.min(1440, Math.max(240, Math.ceil((series.nowMin + 30) / 120) * 120));
-    const firstStep = series.pts.length > 1 ? series.pts[1].x : series.nowMin;
-    const minX = Math.max(0, Math.min(Math.floor((firstStep - 30) / 60) * 60, maxX - 120));
-    const [cum, off] = trendChart.data.datasets;
-    trendChart.options.scales.x.min = minX;
-    trendChart.options.scales.x.max = maxX;
-    cum.data = series.pts[0] && series.pts[0].x < minX ? [{ x: minX, y: 0 }, ...series.pts.slice(1)] : series.pts;
-    off.data = series.official ? [{ x: 0, y: series.official }, { x: maxX, y: series.official }] : [];
-  } else {
-    const week = m.week;
-    trendChart.data.labels = week.map(d => `${Number(d.key.slice(5, 7))}/${Number(d.key.slice(8, 10))}`);
-    trendChart.data.datasets[0].data = week.map(d => d.spend);
-    trendChart.data.datasets[0].backgroundColor = week.map(d =>
-      d.source === 'none' ? 'rgba(255,255,255,0.045)'
-        : d.source === 'official' ? '#4fdfd0' : 'rgba(46,196,182,0.42)');
-  }
+  const ds = trendChart.data.datasets[0];
+  ds.data = series.pts;
+  const xs = trendChart.options.scales.x;
+  xs.min = series.pts.length ? series.pts[0].x : undefined;
+  xs.max = series.pts.length ? Math.max(series.now, series.pts[series.pts.length - 1].x) : undefined;
+  xs.ticks.stepSize = tickStep(series.mode, series.pts);
   trendChart.update();
 }
 
@@ -1669,16 +1721,13 @@ function render(info) {
   document.getElementById('monthConsumeSub').textContent = monthSub.join(' · ');
   setMoney('todayConsume', m.todaySpend, cur);
   // 主数字只给一个：官方与观测取较大值，另一个降级成备注
-  const series = todaySeries();
-  const offToday = officialDay(localDate(Date.now()));
-  if (offToday) series.official = offToday.cost;
-
+  const today = sampleSeries(startOfDay(Date.now()), Date.now());
   document.getElementById('todayConsumeSub').textContent = m.todaySource === 'official'
     ? (m.todayObserved > 0
       ? `官方口径 · 页面观测到 ${money(m.todayObserved, cur)}`
       : '今日暂无观测采样，取自官方用量')
-    : series.steps > 0
-      ? `每 ${money(0.01, cur)} 一档 · 最近一笔 ${clock(series.lastAt)}${series.gap ? ' · 含隔夜缺口' : ''}`
+    : today.steps > 0
+      ? `每 ${money(0.01, cur)} 一档 · 最近一笔 ${clock(today.lastAt)}`
       : '页面打开后开始采样';
   // 样本不足时"日均"就是今天一天的平均，给数字会和"本日消费"重复，看起来像算错了
   const enough = m.daysCounted >= 3 && m.daily.some(d => d.has);
@@ -1686,7 +1735,7 @@ function render(info) {
   else document.getElementById('avgDaily').textContent = '—';
   document.getElementById('avgDailySub').textContent = avgNote(m, total, cur);
 
-  updateChart(m, series);
+  updateChart(m, trendSeries());
   document.getElementById('pollNote').textContent = pollInterval() / 60000;
   updatePeak();
   renderUsage(m);
