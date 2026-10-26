@@ -9,7 +9,7 @@
 ![backend](https://img.shields.io/badge/backend-none-success)
 ![purpose](https://img.shields.io/badge/purpose-balance%20%26%20spend-58a6ff)
 
-[**🌐 在线打开**](https://lizhenghe-chen.github.io/deepseek-balance-dashboard/) · 无需克隆
+[**🌐 在线打开**](https://bunnychen.top/deepseek-balance-dashboard/) · 无需克隆
 
 </div>
 
@@ -36,7 +36,7 @@
 
 **方式一：直接访问在线版**（推荐）
 
-<https://lizhenghe-chen.github.io/deepseek-balance-dashboard/>
+<https://bunnychen.top/deepseek-balance-dashboard/>
 
 **方式二：克隆到本地**
 
@@ -60,17 +60,19 @@ git clone https://github.com/Lizhenghe-Chen/deepseek-balance-dashboard.git
 2. **Source** 选 **Deploy from a branch**，分支 `main`，目录 `/ (root)`，保存
 3. 约一分钟后访问 `https://<用户名>.github.io/<仓库名>/`；之后每次 `git push` 自动重新发布
 
+> 本仓库的账号已给 Pages 绑定自定义域名 `bunnychen.top`（项目站点沿用它，形如 `https://bunnychen.top/<仓库名>/`），因此 `https://lizhenghe-chen.github.io/deepseek-balance-dashboard/` 会 301 跳到 `https://bunnychen.top/deepseek-balance-dashboard/`，两者等效。
+
 `.nojekyll` 让 Pages 跳过 Jekyll 处理，文件按原样发布。
 
-浏览器能否直连 DeepSeek：已实测该接口对 `https://<用户名>.github.io` 来源的预检请求回显 `Access-Control-Allow-Origin` 并允许 `Authorization` 头，因此 Pages 版可以直接调用，无需任何代理或后端。
+浏览器能否直连 DeepSeek：已实测该接口对本站点实际来源（`https://bunnychen.top`）的预检请求回显 `Access-Control-Allow-Origin` 并允许 `Authorization` 头，因此 Pages 版可以直接调用，无需任何代理或后端。
 
 ### 公开托管时需要注意的三点
 
 - **站点是公开的，但数据不是**。任何人打开这个网址看到的都是同一份前端代码，各自拥有属于自己的浏览器本地数据；仓库和页面里没有任何密钥。
-- **同账号的 Pages 站点共享一个 origin**。`https://<用户名>.github.io` 是一个 origin，而 `localStorage` / `sessionStorage` 只按 origin 隔离、不按仓库隔离，因此：
-  - 余额历史（`ds_history_v2`）理论上可被你名下其他 Pages 页面读到——内容只有余额快照，不含 Key；
+- **同账号的 Pages 站点共享一个 origin**。站点实际来源是 `https://bunnychen.top`（或未绑自定义域名时的 `https://<用户名>.github.io`），这是一个**账号级** origin：`localStorage` / `sessionStorage` 只按 origin 隔离，不按仓库隔离，因此本站与同账号的其它 Pages 项目（若本站与博客等共用同一域名，也包括博客）共享同一份浏览器存储：
+  - 余额历史（`ds_history_v2`）理论上可被同一 origin 下的其它页面读到——内容只有余额快照，不含 Key；
   - API Key 存在 `sessionStorage`（仅当前标签页、关闭即清除），但如果你在**同一标签页**里跳转到该 origin 下的其他页面，对方在这次会话中可以看到它。
-  - 介意的话：给 Pages 绑定自定义域名（独立 origin），或避免在同一标签页访问该账号下的其他 Pages 页面。
+  - 介意的话：给本仓库的 Pages 单独配置一个子域名（Settings → Pages → Custom domain，例如 `dash.bunnychen.top`），它就拥有独立 origin，与博客等页面彻底隔离；或者干脆避免在同一标签页访问该 origin 下的其他页面。
 - **必须走 HTTPS**。Pages 默认提供；页面自带的 CSP 只放行 `api.deepseek.com`，即便页面被注入也无法把 Key 发往别处。同时输入框已关闭自动填充，避免浏览器把这个 key 当成密码保存到站点上。
 
 > 也可以部署到 Cloudflare Pages / Netlify / Vercel 等任意静态托管，行为一致。
