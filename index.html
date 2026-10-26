@@ -241,12 +241,6 @@
   .block__title { font-size: 0.92rem; font-weight: 600; letter-spacing: 0.01em; }
   .block__meta { font-size: 0.73rem; color: var(--ink-3); }
   .block__side { display: flex; align-items: center; gap: 12px; }
-  .block__legend { display: inline-flex; align-items: center; color: var(--ink-3); }
-  .dot { width: 7px; height: 7px; border-radius: 2px; display: inline-block; margin: 0 5px 0 10px; }
-  .block__legend .dot:first-child { margin-left: 0; }
-  .dot--cum { background: #4fdfd0; }
-  .dot--observed { background: rgba(46, 196, 182, 0.42); }
-  .dot--official { width: 12px; height: 2px; border-radius: 1px; background: rgba(232, 163, 61, 0.9); }
   .zoom {
     display: inline-flex; align-items: center; gap: 2px;
     padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
@@ -264,6 +258,9 @@
     font-variant-numeric: tabular-nums; color: var(--ink-2);
   }
   .zoom__btn--span:hover { color: var(--ink); }
+  /* 消费 / 余额 视图切换：与缩放控件同款胶囊，选中态给底色 */
+  .seg__btn { min-width: 46px; padding: 0 10px; }
+  .seg__btn.is-on { color: var(--ink); background: var(--surface-2); }
   .trend__meta { margin: -6px 0 10px; font-size: 0.73rem; color: var(--ink-3); }
   .trend__meta[hidden] { display: none; }
   .canvas-box { position: relative; width: 100%; height: 320px; }
@@ -677,8 +674,6 @@
     /* 窄屏：标题独占一行，图例靠左、缩放靠右各就各位，不和标题抢宽度 */
     .block__head { row-gap: 8px; }
     .block__side { width: 100%; justify-content: space-between; }
-    .block__legend { order: 1; }
-    .zoom { order: 2; }
     .trend__meta { margin-top: -2px; }
     #usageBlock .block__side { justify-content: space-between; }
     /* 设置面板：窄屏收紧内边距，账户行允许换行，避免"删除"被挤出屏幕 */
@@ -821,9 +816,12 @@
 
   <section class="block">
     <div class="block__head">
-      <h2 class="block__title">消费趋势</h2>
+      <h2 class="block__title" id="trendTitle">消费趋势</h2>
       <span class="block__side">
-        <span class="block__meta block__legend" id="chartLegend" aria-hidden="true"></span>
+        <span class="zoom" role="group" aria-label="趋势类型">
+          <button class="zoom__btn seg__btn is-on" id="viewSpend" onclick="setChartView('spend')" aria-pressed="true">消费</button>
+          <button class="zoom__btn seg__btn" id="viewBalance" onclick="setChartView('balance')" aria-pressed="false">余额</button>
+        </span>
         <span class="zoom" role="group" aria-label="时间跨度">
           <button class="zoom__btn" id="zoomOut" onclick="zoomChart(2)" title="放大时间跨度" aria-label="放大时间跨度">−</button>
           <button class="zoom__btn zoom__btn--span" id="zoomLabel" onclick="zoomChart(0)" title="点击回到全部数据">全部</button>
@@ -1524,9 +1522,20 @@ const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
 const SAMPLE_MODE_MAX = 30 * HOUR;
 const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const VIEW_SLOT = 'ds_chart_view';
+const readView = () => { try { return localStorage.getItem(VIEW_SLOT) === 'balance' ? 'balance' : 'spend'; } catch { return 'spend'; } };
 let viewWindow = 0;          // 0 = 全部
-let builtMode = '';
+let chartView = readView();  // 'spend' 累计消费 / 'balance' 余额
+let builtKey = '';           // 视图 + 粒度，任一变化都要重建实例
 let trendChart = null;
+
+function setChartView(view) {
+  const next = view === 'balance' ? 'balance' : 'spend';
+  if (next === chartView) return;
+  chartView = next;
+  try { localStorage.setItem(VIEW_SLOT, next); } catch { /* 忽略：不影响本次查看 */ }
+  render();
+}
 
 const startOfDay = t => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
 const hm = t => { const d = new Date(t); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
@@ -1560,7 +1569,7 @@ function sampleSeries(from, now) {
   let cum = 0, steps = 0, gap = false, lastAt = 0;
   const s = store.s;
   const first = s.findIndex(e => e.t >= from);
-  if (first < 0) return { pts: [], cum: 0, steps: 0, gap: false, lastAt: 0, from, now, mode: 'sample' };
+  if (first < 0) return { view: 'spend', pts: [], cum: 0, steps: 0, gap: false, lastAt: 0, from, now, mode: 'sample' };
 
   for (let i = Math.max(first, 1); i < s.length; i++) {
     const delta = +(s[i].b - s[i - 1].b).toFixed(2);
@@ -1572,7 +1581,7 @@ function sampleSeries(from, now) {
     pts.push({ x: s[i].t, y: cum, step: -delta });
   }
   if (now > pts[pts.length - 1].x) pts.push({ x: now, y: cum, tail: true });
-  return { pts, cum, steps, gap, lastAt, from, now, mode: 'sample' };
+  return { view: 'spend', pts, cum, steps, gap, lastAt, from, now, mode: 'sample' };
 }
 
 // 按天：每天一级台阶，取官方优先的最终值；窗口对齐到本地零点，避免"半天"混进来
@@ -1590,15 +1599,69 @@ function dailySeries(from, now) {
     if (c.source !== 'none') has++;
     pts.push({ x: t, y: cum, day: c.spend, source: c.source, est: c.est, observed: c.observed });
   }
-  return { pts, cum, days: pts.length, has, officialDays, from: first, now, mode: 'daily' };
+  return { view: 'spend', pts, cum, days: pts.length, has, officialDays, from: first, now, mode: 'daily' };
+}
+
+// 余额级：窗口起点那一刻的余额 + 之后每一次变动；余额没变的采样不必画成点
+function balanceSampleSeries(from, now) {
+  const s = store.s;
+  const base = { view: 'balance', mode: 'sample', pts: [], changes: 0, gap: false, lastAt: 0, from, now };
+  if (!s.length) return base;
+
+  let i = s.length - 1;
+  while (i > 0 && s[i].t > from) i--;                 // from 之前（含）最后一次采样
+  const startAt = s[i];
+  const pts = [{ x: from, y: startAt.b }];
+  let prev = startAt.b, changes = 0, lastAt = 0;
+  for (let k = i + 1; k < s.length; k++) {
+    if (s[k].b === prev) continue;
+    pts.push({ x: s[k].t, y: s[k].b, delta: +(s[k].b - prev).toFixed(2) });
+    prev = s[k].b;
+    changes++;
+    lastAt = s[k].t;
+  }
+  if (now > s[s.length - 1].t) pts.push({ x: now, y: s[s.length - 1].b, tail: true });
+  return { ...base, pts, changes, gap: startAt.t < from - 5 * 60000, lastAt };
+}
+
+// 余额按天：取当天最后一次采样；当天没采样就沿用之前的余额
+function balanceDailySeries(from, now) {
+  const s = store.s;
+  const first = startOfDay(from);
+  const base = { view: 'balance', mode: 'daily', pts: [], has: 0, days: 0, from: first, now };
+  if (!s.length) return base;
+
+  let i = 0, level = s[0].b;
+  while (i < s.length && s[i].t <= first) { level = s[i].b; i++; }
+  const pts = [];
+  let has = 0;
+  for (let t = first; t <= startOfDay(now); t = startOfDay(t + DAY + HOUR)) {
+    let seen = false;
+    const dayEnd = t + DAY;
+    while (i < s.length && s[i].t < dayEnd) { level = s[i].b; i++; seen = true; }
+    if (seen) has++;
+    pts.push({ x: t, y: level, day: seen });
+  }
+  return { ...base, pts, has, days: pts.length };
 }
 
 function trendSeries() {
   const win = currentWindow();
   const now = Date.now();
-  if (win <= SAMPLE_MODE_MAX) return sampleSeries(now - win, now);
-  const days = Math.max(2, Math.ceil(win / DAY));
-  return dailySeries(startOfDay(now) - (days - 1) * DAY, now);
+  const daily = win > SAMPLE_MODE_MAX;
+  const from = daily ? startOfDay(now) - (Math.max(2, Math.ceil(win / DAY)) - 1) * DAY : now - win;
+  if (chartView === 'balance') return daily ? balanceDailySeries(from, now) : balanceSampleSeries(from, now);
+  return daily ? dailySeries(from, now) : sampleSeries(from, now);
+}
+
+// 余额轴不从 0 起：按数据区间留 15% 余量，避免几百元的波动被压成一条直线
+function balanceBounds(pts) {
+  if (!pts.length) return { min: undefined, max: undefined };
+  const vals = pts.map(p => p.y);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  // 留白按数据波动给，但不超过余额的 4%：一次大额充值不该把曲线压成一条缝
+  const pad = Math.min(Math.max((hi - lo) * 0.12, 0.02), Math.max(hi * 0.04, 0.02));
+  return { min: +Math.max(0, lo - pad).toFixed(2), max: +(hi + pad).toFixed(2) };
 }
 
 function tickStep(mode, pts) {
@@ -1614,15 +1677,21 @@ function tickStep(mode, pts) {
 
 const fmtTick = (v, mode) => (mode === 'daily' ? md(v) : hm(v));
 
+const LINE = { spend: '#4fdfd0', balance: '#e8a33d' };
+const FILL = { spend: 'rgba(79,223,208,0.10)', balance: 'rgba(232,163,61,0.07)' };
+
 function trendConfig(series) {
   const mode = series.mode;
+  const isBal = series.view === 'balance';
+  const bounds = isBal ? balanceBounds(series.pts) : null;
   return {
     type: 'line',
     data: {
       datasets: [{
-        label: '累计消费', data: series.pts, stepped: 'after', fill: true,
-        borderColor: '#4fdfd0', backgroundColor: 'rgba(79,223,208,0.10)', borderWidth: 2,
-        pointRadius: 0, pointHoverRadius: 4, pointBackgroundColor: '#4fdfd0',
+        label: isBal ? '余额' : '累计消费', data: series.pts, stepped: 'after',
+        fill: isBal ? 'start' : true,          // 余额轴不从 0 起，填充到画布底部且只给很淡的一层
+        borderColor: LINE[series.view], backgroundColor: FILL[series.view], borderWidth: 2,
+        pointRadius: 0, pointHoverRadius: 4, pointBackgroundColor: LINE[series.view],
         pointBorderColor: '#0b0d0e', pointBorderWidth: 2,
       }],
     },
@@ -1641,6 +1710,16 @@ function trendConfig(series) {
             },
             label: c => {
               const p = c.raw;
+              if (isBal) {
+                if (mode === 'daily') {
+                  return p.day
+                    ? [`日终余额 ${money(p.y, store.cur)}`]
+                    : [`余额 ${money(p.y, store.cur)}`, '当天没有采样，沿用之前的余额'];
+                }
+                if (p.tail) return [`余额 ${money(p.y, store.cur)}`, '之后暂无采样'];
+                const d = p.delta || 0;
+                return [`余额 ${money(p.y, store.cur)}`, `这一步 ${d < 0 ? '−' : '+'}${money(Math.abs(d), store.cur)}`];
+              }
               if (mode === 'daily') {
                 if (p.source === 'none') return '无数据（页面未打开，也没有官方用量）';
                 const lines = [`当天 ${money(p.day, store.cur)}`, `累计 ${money(p.y, store.cur)}`];
@@ -1667,7 +1746,8 @@ function trendConfig(series) {
           },
         },
         y: {
-          beginAtZero: true, border: { display: false },
+          beginAtZero: !isBal, min: isBal ? bounds.min : undefined, max: isBal ? bounds.max : undefined,
+          border: { display: false },
           grid: { color: 'rgba(255,255,255,0.055)' },
           ticks: { color: '#8a9498', font: { size: 10 }, callback: v => money(v, store.cur) },
         },
@@ -1695,24 +1775,27 @@ function zoomChart(factor) {
   render();
 }
 
-function renderLegend(series) {
-  const el = document.getElementById('chartLegend');
-  el.replaceChildren();
-  const dot = document.createElement('i');
-  dot.className = 'dot dot--cum';
-  const span = document.createElement('span');
-  span.textContent = '累计';
-  el.append(dot, span);
+// 视图切换按钮兼作图例：选中态即当前曲线，标题与画布无障碍名同步
+function renderViewSwitch() {
+  const isBal = chartView === 'balance';
+  const spend = document.getElementById('viewSpend');
+  const bal = document.getElementById('viewBalance');
+  if (spend) { spend.classList.toggle('is-on', !isBal); spend.setAttribute('aria-pressed', String(!isBal)); }
+  if (bal) { bal.classList.toggle('is-on', isBal); bal.setAttribute('aria-pressed', String(isBal)); }
+  document.getElementById('trendTitle').textContent = isBal ? '余额趋势' : '消费趋势';
+  document.getElementById('trendCanvas').setAttribute('aria-label', isBal ? '余额趋势曲线' : '消费趋势曲线');
 }
 
 function updateChart(m, series) {
   const win = currentWindow();
-  const empty = !series.pts.length || !(series.mode === 'daily' ? series.has : series.cum > 0);
+  const isBal = series.view === 'balance';
+  const empty = !series.pts.length
+    || (!isBal && !(series.mode === 'daily' ? series.has : series.cum > 0));
   document.getElementById('chartEmpty').hidden = !empty;
   document.getElementById('chartEmpty').textContent = dataSpan()
-    ? '这段时间还没有消费记录'
+    ? (isBal ? '这段时间还没有采样' : '这段时间还没有消费记录')
     : '还没有采样数据 · 页面开始采样后自动绘制';
-  renderLegend(series);
+  renderViewSwitch();
 
   const label = document.getElementById('zoomLabel');
   if (label) {
@@ -1730,7 +1813,11 @@ function updateChart(m, series) {
   if (meta) {
     const bits = [];
     if (series.mode === 'daily') {
-      if (series.officialDays) bits.push(`其中 ${series.officialDays} 天取自官方用量`);
+      if (isBal && series.days - series.has > 0) bits.push(`${series.days - series.has} 天没有采样，按之前的余额平推`);
+      else if (!isBal && series.officialDays) bits.push(`其中 ${series.officialDays} 天取自官方用量`);
+    } else if (isBal) {
+      if (series.changes) bits.push(`${series.changes} 次余额变动`);
+      if (series.gap) bits.push('起点含隔夜缺口');
     } else if (series.steps) {
       bits.push(`每 ${money(0.01, store.cur)} 一档 · ${series.steps} 笔`);
       if (series.gap) bits.push('起点含隔夜缺口');
@@ -1741,11 +1828,12 @@ function updateChart(m, series) {
 
   if (typeof Chart === 'undefined') return;
 
-  // 采样级与按天级的坐标轴规则不同，模式变化时重建实例；同一模式内只更新数据
-  if (!trendChart || builtMode !== series.mode) {
+  // 视图与粒度共同决定坐标轴规则，任一变化都重建；同一组合内只更新数据
+  const key = `${series.view}|${series.mode}`;
+  if (!trendChart || builtKey !== key) {
     if (trendChart) { trendChart.destroy(); trendChart = null; }
     trendChart = new Chart(document.getElementById('trendCanvas').getContext('2d'), trendConfig(series));
-    builtMode = series.mode;
+    builtKey = key;
     return;
   }
   const ds = trendChart.data.datasets[0];
@@ -1754,6 +1842,11 @@ function updateChart(m, series) {
   xs.min = series.pts.length ? series.pts[0].x : undefined;
   xs.max = series.pts.length ? Math.max(series.now, series.pts[series.pts.length - 1].x) : undefined;
   xs.ticks.stepSize = tickStep(series.mode, series.pts);
+  if (isBal) {
+    const b = balanceBounds(series.pts);
+    trendChart.options.scales.y.min = b.min;
+    trendChart.options.scales.y.max = b.max;
+  }
   trendChart.update();
 }
 
