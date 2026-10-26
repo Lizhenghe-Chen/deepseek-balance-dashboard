@@ -35,7 +35,7 @@
 | ⚡ **手动刷新** | 顶栏 `↻` 即时拉取最新余额（请求带 `no-store`，不吃浏览器缓存），完成后重新计时 |
 | 🔁 **多账户** | 每个 Key 一份独立历史，换 Key 不清空、不互相做差。`⚙️` 里列出所有账户（名字 / 币种 / 条数 / 覆盖天数 / 最后余额），可重命名、可逐个删除；粘贴某个账户的 Key 即切回它 |
 | 💾 **历史备份** | 一键导出**全部账户** + 官方用量为 JSON，导入时按档案合并；可跨浏览器、跨设备迁移 |
-| 🔒 **隐私** | Key 只存在于本标签页内存与 `sessionStorage`（不写 `localStorage`），只在请求余额时发给 `api.deepseek.com` |
+| 🔒 **隐私** | Key 默认只存在于本标签页内存与 `sessionStorage`（不写 `localStorage`），只在请求余额时发给 `api.deepseek.com`；想省事可在设置里勾选「记住 Key」，由你自己决定是否落盘 |
 
 ## 🚀 快速开始
 
@@ -87,7 +87,7 @@ git clone https://github.com/Lizhenghe-Chen/deepseek-balance-dashboard.git
 
 | 问题 | 答案 |
 |---|---|
-| Key 会存到哪里？ | 仅内存 + 当前标签页的 `sessionStorage`（不写 `localStorage`）。注意：`sessionStorage` **不是纯内存**——Chromium / Firefox 为支持「会话恢复」会把它写盘，浏览器崩溃恢复或「继续上次会话」时 Key 可能被还原；正常关闭标签页后其它页面读不到 |
+| Key 会存到哪里？ | 默认：仅内存 + 当前标签页的 `sessionStorage`（不写 `localStorage`）。注意：`sessionStorage` **不是纯内存**——Chromium / Firefox 为支持「会话恢复」会把它写盘，浏览器崩溃恢复或「继续上次会话」时 Key 可能被还原；正常关闭标签页后其它页面读不到。可选：设置里勾选「记住 Key」后，明文写入本机 `localStorage`（`ds_api_key_saved`），新标签页 / 重开浏览器都能直接刷新；取消勾选或点「清除 Key」会立刻删除这份明文 |
 | Key 会被上传吗？ | 只会发给 DeepSeek 官方余额接口 `https://api.deepseek.com/user/balance`（`Authorization: Bearer`），不发往任何第三方；页面没有后端、没有统计 |
 | 设置面板里能看到明文 Key 吗？ | 不会。面板只显示 `sk-••••••1234` 这样的掩码与指纹，输入框永远为空，关闭面板即清空 |
 | 有第三方脚本吗？ | 只有 Chart.js（jsDelivr CDN，带 SRI 完整性校验，哈希已核对）。页面会因此向 jsDelivr 发起一次请求（对端可见 IP / UA，`referrer` 已设为 `no-referrer`） |
@@ -96,6 +96,7 @@ git clone https://github.com/Lizhenghe-Chen/deepseek-balance-dashboard.git
 | CSP 能防住 XSS 吗？ | **不能当成保证**。它挡住了 `fetch` / XHR / WebSocket / beacon / 表单 / 图片外发，只放行 `api.deepseek.com`；但 `script-src` 含 `'unsafe-inline'`（页面用内联 `onclick`），`connect-src` **不管顶层跳转**（`location='…?k='` 能带走 Key），且 CSP 写在 `<meta>` 里、托管方不下发 CSP 响应头——能改页面的人可以连 CSP 一起删掉。真正的防线是"页面里没有任何 HTML 注入点"（全部走 `textContent`） |
 | 公开托管会泄露 Key 吗？ | 托管方拿到的是同一份公开代码，看不到你在浏览器里输入的内容；但**同账号的其他 Pages 站点与本站同源**，它们（或浏览器扩展、DevTools）在特定条件下能读到 `sessionStorage`。要高保障：用独立子域，或把 HTML 下到本地用 `file://` 打开 |
 | 刷新会丢数据吗？ | 不会。刷新保留 Key（`sessionStorage`）与历史（`localStorage`），并立即重新拉取一次余额 |
+| 明明有账户记录，为什么还让我填 Key？ | 记录的是**历史档案**（余额快照 + Key 指纹，不含 Key），Key 默认只活在当前标签页。换标签页 / 重开浏览器 / 换浏览器时历史还在、Key 没了，所以会提示。此时页面会照常用历史渲染、不会弹窗催你；勾选「记住 Key」即可让下一个标签页直接刷新 |
 | 换 Key 会丢历史吗？ | 不会。每个 Key 一份独立档案，粘贴新 Key 只是新建或切回档案，任何历史都不会被清掉；要删得手动在 `⚙️` 里删（两次确认） |
 
 历史里保存的是 Key 的 **djb2 指纹**（用于区分不同账号），不是 Key 本身。

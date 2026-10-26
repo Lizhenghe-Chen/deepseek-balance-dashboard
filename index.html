@@ -557,6 +557,18 @@
   .sheet__input::placeholder { color: var(--ink-3); }
   .sheet__input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .sheet__input--num { width: 108px; }
+  .sheet__check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 0.76rem;
+    line-height: 1.65;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  .sheet__check input { flex: none; margin-top: 3px; accent-color: var(--accent); cursor: pointer; }
+  .sheet__check-hint { margin-top: 2px; font-size: 0.7rem; line-height: 1.6; color: var(--ink-3); }
   .sheet__row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
   .sheet__note { margin-top: 12px; font-size: 0.73rem; line-height: 1.6; color: var(--ink-3); }
   .sheet__error { display: none; margin-top: 10px; font-size: 0.76rem; color: var(--bad); }
@@ -712,6 +724,10 @@
     <div id="keyForm">
       <label class="sheet__field" for="apiKeyInput">DeepSeek API Key</label>
       <input type="password" id="apiKeyInput" class="sheet__input" placeholder="sk-... 留空表示不修改" autocomplete="new-password" spellcheck="false">
+      <label class="sheet__check">
+        <input type="checkbox" id="rememberKey" onchange="setRememberKey(this.checked)">
+        <span>在此浏览器记住 Key<div class="sheet__check-hint">勾选后明文 Key 会存进本机 localStorage，新开标签页直接刷新；共用电脑请勿勾选。</div></span>
+      </label>
     </div>
     <div class="sheet__accounts" id="accountList" hidden>
       <span class="sheet__field">账户历史（每个 Key 一份，互不影响）</span>
@@ -865,25 +881,41 @@
 const API_URL = 'https://api.deepseek.com/user/balance';
 
 // ===== Key 管理 =====
-// Key 只驻留内存 + sessionStorage（关闭标签页即清除），不写入 localStorage。
-const KEY_SLOT = 'ds_api_key';
-let memoryKey = (() => {
-  try { return sessionStorage.getItem(KEY_SLOT) || ''; } catch { return ''; }
-})();
+// 默认只驻留内存 + sessionStorage（关闭标签页即清除）；用户在设置里主动勾选
+// 「记住 Key」后才写 localStorage，新标签页就能直接刷新。
+const KEY_SLOT = 'ds_api_key';            // sessionStorage：本标签页
+const KEY_PERSIST_SLOT = 'ds_api_key_saved';   // localStorage：仅勾选「记住 Key」时
+const REMEMBER_SLOT = 'ds_remember_key';  // localStorage：是否记住（偏好）
+const readSlot = (area, slot) => { try { return area.getItem(slot) || ''; } catch { return ''; } };
+const writeSlot = (area, slot, v) => {
+  try {
+    if (v) area.setItem(slot, v);
+    else area.removeItem(slot);
+  } catch { /* 存储不可用（隐私模式 / 配额满）时降级为仅内存 */ }
+};
+
+const remembersKey = () => readSlot(localStorage, REMEMBER_SLOT) === '1';
+let memoryKey = readSlot(sessionStorage, KEY_SLOT) || readSlot(localStorage, KEY_PERSIST_SLOT);
 
 const getKey = () => memoryKey;
 
 function setKey(key) {
   memoryKey = key || '';
-  try {
-    if (memoryKey) sessionStorage.setItem(KEY_SLOT, memoryKey);
-    else sessionStorage.removeItem(KEY_SLOT);
-  } catch { /* 存储不可用时仅保留在内存 */ }
+  writeSlot(sessionStorage, KEY_SLOT, memoryKey);
+  if (!memoryKey) writeSlot(localStorage, KEY_PERSIST_SLOT, '');
+  else if (remembersKey()) writeSlot(localStorage, KEY_PERSIST_SLOT, memoryKey);
 }
 
-// 清理旧版本遗留在 localStorage 中的明文 Key
+// 「记住 Key」开关：关掉时立刻把磁盘上的明文删掉，当前标签页继续用内存里的
+function setRememberKey(on) {
+  writeSlot(localStorage, REMEMBER_SLOT, on ? '1' : '');
+  if (on) writeSlot(localStorage, KEY_PERSIST_SLOT, memoryKey);
+  else writeSlot(localStorage, KEY_PERSIST_SLOT, '');
+}
+
+// 清理旧版本遗留在 localStorage 中的明文 Key（旧版用过同一个 key 名）
 function purgeLegacyKey() {
-  try { localStorage.removeItem(KEY_SLOT); } catch { /* ignore */ }
+  try { localStorage.removeItem('ds_api_key'); } catch { /* ignore */ }
 }
 
 function modalError(msg) {
@@ -909,12 +941,19 @@ function readBackup() {
 
 function describeKey() {
   const key = getKey();
-  if (!key) return '尚未设置 Key。Key 只保存在当前标签页，刷新会保留，关闭标签页即清除。';
   const last = store.s[store.s.length - 1];
+  if (!key) {
+    // 历史在、Key 不在（换了标签页 / 浏览器）：说清楚"记录还在，只是缺 Key"
+    const owned = Object.keys(accounts).length;
+    return owned && last
+      ? `本标签页还没有 Key，但本地存着 ${owned} 个账户的历史（当前 ${money(last.b, store.cur)}，最近采样 ${clock(last.t)}）。填入 Key 继续实时记录，或关掉面板只看历史。`
+      : '尚未设置 Key。Key 默认只保存在当前标签页（刷新保留、关标签页清除），勾选「记住 Key」可让它留在这台电脑上。';
+  }
   const name = store.name || store.userTag || `账户 ${fingerprint(key).slice(0, 6)}`;
   return [
     `当前：${name} · ${maskKey(key)}（指纹 ${fingerprint(key)}）`,
     store.s.length ? `本地历史 ${store.s.length} 条 · ${store.cur} · 最后采样 ${clock(last.t)}` : '尚无本地历史',
+    remembersKey() ? 'Key 已记住：下次打开本页面自动刷新' : 'Key 只在当前标签页，关闭后需重新填写',
   ].join('\n');
 }
 
@@ -965,6 +1004,7 @@ function openSettings() {
   document.getElementById('modalError').style.display = 'none';
   document.getElementById('keyForm').hidden = false;
   document.getElementById('keyActions').hidden = false;
+  document.getElementById('rememberKey').checked = remembersKey();
   renderAccounts();
   const alertCfg = readAlert();
   document.getElementById('alertThreshold').value = alertCfg ? alertCfg.threshold : (LOW_BALANCE[store.cur] || 10);
@@ -2640,6 +2680,9 @@ migrateLegacyHistory(startKey);
 if (store.s.length) render();
 if (startKey) {
   doRefresh();
+} else if (store.s.length) {
+  // 本标签页没有 Key，但本地存着历史：先照常渲染，别用弹窗挡住已看到的数据
+  setStatus('本标签页还没有 Key · 下面是本地历史，点右上角 ⚙ 填入后继续实时记录', 'info');
 } else {
   setStatus('请设置 API Key', 'error');
   openSettings();
