@@ -1514,13 +1514,15 @@ function analyze(samples) {
   };
 }
 
-// ===== 图表：消费趋势（跨度自适应 + 可缩放）=====
-// 默认只画"数据实际覆盖的范围"，不做固定一周；窗口 ≤30 小时用采样级（分钟定位），
-// 更长则按天阶梯（每天的数取官方优先的最终值）。缩放以"现在"为右端，− 放大跨度、＋ 收窄。
+// ===== 图表：余额 / 累计消费（跨度自适应 + 可缩放）=====
+// 默认只画"数据实际覆盖的范围"，不做固定一周。曲线始终落在采样上：跨度变大时先保住分钟级落点，
+// 只有点数超出一屏能看清的量级才按整小时/整天降采样（桶内余额取最后一次、消费累加），细节尽量不丢。
+// 缩放以"现在"为右端，− 放大跨度、＋ 收窄。
 const MIN_WINDOW_MS = 2 * 3600 * 1000;
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
-const SAMPLE_MODE_MAX = 30 * HOUR;
+const SAMPLE_MODE_MAX = 30 * HOUR;   // 只影响窗口文案：≤30 小时说"小时"，更长说"天"
+const MAX_POINTS = 600;              // 一屏最多画多少级台阶，超过才降采样
 const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 const VIEW_SLOT = 'ds_chart_view';
 const readView = () => { try { return localStorage.getItem(VIEW_SLOT) === 'spend' ? 'spend' : 'balance'; } catch { return 'balance'; } };
@@ -1578,28 +1580,57 @@ function sampleSeries(from, now) {
     steps++;
     lastAt = s[i].t;
     if (s[i - 1].t < from - 5 * 60000) gap = true;  // 窗口前那一段无法定位
-    pts.push({ x: s[i].t, y: cum, step: -delta });
+    pts.push({ x: s[i].t, y: cum, spend: -delta });
   }
   if (now > pts[pts.length - 1].x) pts.push({ x: now, y: cum, tail: true });
   return { view: 'spend', pts, cum, steps, gap, lastAt, from, now, mode: 'sample' };
 }
 
-// 按天：每天一级台阶，取官方优先的最终值；窗口对齐到本地零点，避免"半天"混进来
-function dailySeries(from, now) {
-  const perDay = perDayMap(store.s);
-  const first = startOfDay(from);
-  const last = startOfDay(now);
-  const pts = [];
-  let cum = 0, officialDays = 0, has = 0;
-
-  for (let t = first; t <= last; t = startOfDay(t + DAY + HOUR)) {
-    const c = dayCost(localDate(t), perDay.get(localDate(t)));
-    cum = +(cum + c.spend).toFixed(2);
-    if (c.source === 'official') officialDays++;
-    if (c.source !== 'none') has++;
-    pts.push({ x: t, y: cum, day: c.spend, source: c.source, est: c.est, observed: c.observed });
+// 降采样步长：点数超预算时按 1/5/15/30 分钟、整点到整天逐级放大；0 表示照采样画
+function bucketStep(win, count) {
+  if (count <= MAX_POINTS) return 0;
+  const need = win / MAX_POINTS;
+  for (const step of [60000, 5 * 60000, 15 * 60000, 30 * 60000, HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, DAY]) {
+    if (need <= step) return step;
   }
-  return { view: 'spend', pts, cum, days: pts.length, has, officialDays, from: first, now, mode: 'daily' };
+  return Math.ceil(need / DAY) * DAY;
+}
+
+// 桶边界对齐本地整点（整天步长即零点），避免"半个桶"混进来
+function nextBucket(t, step) {
+  const dayStart = startOfDay(t);
+  return dayStart + (Math.floor((t - dayStart) / step) + 1) * step;
+}
+
+// 降采样后的累计消费：桶内观测到的扣款求和，台阶落在桶边界
+function spendBucketSeries(from, now, step) {
+  const s = store.s;
+  const base = { view: 'spend', mode: 'bucket', step, pts: [], cum: 0, steps: 0, gap: false, lastAt: 0, from, now };
+  if (!s.length) return base;
+
+  let i = s.length - 1;
+  while (i > 0 && s[i].t > from) i--;              // from 之前（含）最后一次采样
+  const startAt = s[i];
+  const pts = [{ x: from, y: 0 }];
+  let cum = 0, steps = 0, lastAt = 0;
+
+  const take = end => {
+    let spend = 0;
+    while (i + 1 < s.length && s[i + 1].t <= end) {
+      const delta = +(s[i + 1].b - s[i].b).toFixed(2);
+      i++;
+      if (delta < 0) { spend = +(spend - delta).toFixed(2); steps++; lastAt = s[i].t; }
+    }
+    return spend;
+  };
+
+  for (let end = nextBucket(from, step); end < now; end = nextBucket(end, step)) {
+    const spend = take(end);
+    cum = +(cum + spend).toFixed(2);
+    pts.push({ x: end, y: cum, spend });
+  }
+  pts.push({ x: now, y: +(cum + take(now)).toFixed(2), tail: true });
+  return { ...base, pts, cum: pts[pts.length - 1].y, steps, lastAt, gap: startAt.t < from - 5 * 60000 };
 }
 
 // 余额级：窗口起点那一刻的余额 + 之后每一次变动；余额没变的采样不必画成点
@@ -1624,34 +1655,44 @@ function balanceSampleSeries(from, now) {
   return { ...base, pts, changes, gap: startAt.t < from - 5 * 60000, lastAt };
 }
 
-// 余额按天：取当天最后一次采样；当天没采样就沿用之前的余额
-function balanceDailySeries(from, now) {
+// 降采样后的余额：每个桶取桶内最后一次采样，台阶落在桶边界
+function balanceBucketSeries(from, now, step) {
   const s = store.s;
-  const first = startOfDay(from);
-  const base = { view: 'balance', mode: 'daily', pts: [], has: 0, days: 0, from: first, now };
+  const base = { view: 'balance', mode: 'bucket', step, pts: [], changes: 0, gap: false, lastAt: 0, from, now };
   if (!s.length) return base;
 
-  let i = 0, level = s[0].b;
-  while (i < s.length && s[i].t <= first) { level = s[i].b; i++; }
-  const pts = [];
-  let has = 0;
-  for (let t = first; t <= startOfDay(now); t = startOfDay(t + DAY + HOUR)) {
-    let seen = false;
-    const dayEnd = t + DAY;
-    while (i < s.length && s[i].t < dayEnd) { level = s[i].b; i++; seen = true; }
-    if (seen) has++;
-    pts.push({ x: t, y: level, day: seen });
+  let i = s.length - 1;
+  while (i > 0 && s[i].t > from) i--;              // from 之前（含）最后一次采样
+  const startAt = s[i];
+  const pts = [{ x: from, y: startAt.b }];
+  let level = startAt.b, changes = 0, lastAt = 0;
+
+  const take = end => {
+    const before = level;
+    while (i + 1 < s.length && s[i + 1].t <= end) {
+      i++;
+      if (s[i].b !== level) { level = s[i].b; changes++; lastAt = s[i].t; }
+    }
+    return +(level - before).toFixed(2);
+  };
+
+  for (let end = nextBucket(from, step); end < now; end = nextBucket(end, step)) {
+    const delta = take(end);
+    pts.push({ x: end, y: level, delta });
   }
-  return { ...base, pts, has, days: pts.length };
+  const tailDelta = take(now);
+  pts.push({ x: now, y: level, delta: tailDelta, tail: true });
+  return { ...base, pts, changes, lastAt, gap: startAt.t < from - 5 * 60000 };
 }
 
 function trendSeries() {
   const win = currentWindow();
   const now = Date.now();
-  const daily = win > SAMPLE_MODE_MAX;
-  const from = daily ? startOfDay(now) - (Math.max(2, Math.ceil(win / DAY)) - 1) * DAY : now - win;
-  if (chartView === 'balance') return daily ? balanceDailySeries(from, now) : balanceSampleSeries(from, now);
-  return daily ? dailySeries(from, now) : sampleSeries(from, now);
+  const from = now - win;
+  const raw = chartView === 'balance' ? balanceSampleSeries(from, now) : sampleSeries(from, now);
+  const step = bucketStep(win, raw.pts.length);
+  if (!step) return raw;                          // 落点还看得清，就按采样原样画
+  return chartView === 'balance' ? balanceBucketSeries(from, now, step) : spendBucketSeries(from, now, step);
 }
 
 // 轴刻度取 1/2/5×10ⁿ 的整数档：既避免 ¥169.61 这种怪刻度，也不会让余额贴着边框
@@ -1675,25 +1716,37 @@ function balanceBounds(pts) {
   };
 }
 
-function tickStep(mode, pts) {
-  if (mode === 'daily') {
-    const n = pts.length;
-    return n <= 5 ? DAY : n <= 10 ? 2 * DAY : Math.ceil(n / 6) * DAY;
+// 横轴刻度：对齐本地整点/零点，最多 7 格；整天步长时自然只剩日期刻度
+const TICK_LADDER = [
+  15 * 60000, 30 * 60000, HOUR, 2 * HOUR, 3 * HOUR, 4 * HOUR, 6 * HOUR, 8 * HOUR, 12 * HOUR,
+  DAY, 2 * DAY, 3 * DAY, 5 * DAY, 7 * DAY, 10 * DAY, 14 * DAY, 30 * DAY,
+];
+
+function axisTicks(min, max) {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return [{ value: min }];
+  const target = Math.ceil((max - min) / 7);
+  for (const step of TICK_LADDER) {
+    if (step < target) continue;
+    const ticks = [];
+    for (let t = nextBucket(min - 1, step); t <= max; t = nextBucket(t, step)) ticks.push({ value: t });
+    if (ticks.length && ticks.length <= 7) return ticks;
   }
-  const span = pts.length ? pts[pts.length - 1].x - pts[0].x : HOUR;
-  if (span <= 3 * HOUR) return 30 * 60000;
-  if (span <= 10 * HOUR) return HOUR;
-  return 3 * HOUR;
+  return [{ value: min }, { value: max }];
 }
 
-const fmtTick = (v, mode) => (mode === 'daily' ? md(v) : hm(v));
+// 零点刻度标日期，其余只给时刻；第一个刻度带上日期，避免开头看不出是哪天
+const fmtTick = (v, i) => {
+  if (v === startOfDay(v)) return md(v);
+  return i === 0 ? `${md(v)} ${hm(v)}` : hm(v);
+};
 
 const LINE = { spend: '#4fdfd0', balance: '#e8a33d' };
 const FILL = { spend: 'rgba(79,223,208,0.10)', balance: 'rgba(232,163,61,0.07)' };
+const signedMoney = (v, cur) => `${v < 0 ? '−' : '+'}${money(Math.abs(v), cur)}`;
 
 function trendConfig(series) {
-  const mode = series.mode;
   const isBal = series.view === 'balance';
+  const dayGrain = series.mode === 'bucket' && series.step >= DAY;   // 粗到按天时，台阶即"日终"
   const bounds = isBal ? balanceBounds(series.pts) : null;
   return {
     type: 'line',
@@ -1715,31 +1768,29 @@ function trendConfig(series) {
           callbacks: {
             title: items => {
               const t = items[0].parsed.x;
-              return mode === 'daily'
-                ? `${md(t)} ${WD[new Date(t).getDay()]}`
-                : `${md(t)} ${hm(t)}`;
+              return dayGrain ? `${md(t)} ${WD[new Date(t).getDay()]}` : `${md(t)} ${hm(t)}`;
             },
             label: c => {
               const p = c.raw;
+              const y = money(p.y, store.cur);
               if (isBal) {
-                if (mode === 'daily') {
-                  return p.day
-                    ? [`日终余额 ${money(p.y, store.cur)}`]
-                    : [`余额 ${money(p.y, store.cur)}`, '当天没有采样，沿用之前的余额'];
+                if (p.tail) return [`余额 ${y}`, '之后暂无采样'];
+                if (dayGrain) {
+                  return p.delta
+                    ? [`日终余额 ${y}`, `当天 ${signedMoney(p.delta, store.cur)}`]
+                    : [`日终余额 ${y}`, '当天没有采样，沿用之前的余额'];
                 }
-                if (p.tail) return [`余额 ${money(p.y, store.cur)}`, '之后暂无采样'];
-                const d = p.delta || 0;
-                return [`余额 ${money(p.y, store.cur)}`, `这一步 ${d < 0 ? '−' : '+'}${money(Math.abs(d), store.cur)}`];
+                if (p.delta == null) return `余额 ${y}`;
+                if (!p.delta) return [`余额 ${y}`, '这一档余额没有变动'];
+                return [`余额 ${y}`, `${series.mode === 'bucket' ? '这一档' : '这一步'} ${signedMoney(p.delta, store.cur)}`];
               }
-              if (mode === 'daily') {
-                if (p.source === 'none') return '无数据（页面未打开，也没有官方用量）';
-                const lines = [`当天 ${money(p.day, store.cur)}`, `累计 ${money(p.y, store.cur)}`];
-                if (p.source === 'official') lines.push(`官方口径${p.observed > 0 ? ` · 观测 ${money(p.observed, store.cur)}` : ''}`);
-                else if (p.est) lines.push('含跨零点缺口，可能属于前一天');
-                return lines;
+              if (p.tail) return `累计 ${y} · 之后暂无消费`;
+              if (series.mode === 'bucket') {
+                const amt = p.spend || 0;
+                const unit = dayGrain ? '当天' : '这一档';
+                return [amt > 0 ? `${unit} ${money(amt, store.cur)}` : `${unit}没有记录到消费`, `累计 ${y}`];
               }
-              if (p.tail) return `累计 ${money(p.y, store.cur)} · 之后暂无消费`;
-              return [`累计 ${money(p.y, store.cur)}`, `这一步 +${money(p.step, store.cur)}`];
+              return [`累计 ${y}`, `这一步 +${money(p.spend, store.cur)}`];
             },
           },
         },
@@ -1750,10 +1801,10 @@ function trendConfig(series) {
           min: series.pts.length ? series.pts[0].x : undefined,
           max: series.pts.length ? Math.max(series.now, series.pts[series.pts.length - 1].x) : undefined,
           border: { display: false }, grid: { display: false },
+          afterBuildTicks: scale => { scale.ticks = axisTicks(scale.min, scale.max); },
           ticks: {
             color: '#8a9498', font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 7,
-            stepSize: tickStep(mode, series.pts),
-            callback: v => fmtTick(v, mode),
+            callback: fmtTick,
           },
         },
         y: {
@@ -1803,8 +1854,7 @@ function renderViewSwitch() {
 function updateChart(m, series) {
   const win = currentWindow();
   const isBal = series.view === 'balance';
-  const empty = !series.pts.length
-    || (!isBal && !(series.mode === 'daily' ? series.has : series.cum > 0));
+  const empty = !series.pts.length || (!isBal && !(series.cum > 0));
   document.getElementById('chartEmpty').hidden = !empty;
   document.getElementById('chartEmpty').textContent = dataSpan()
     ? (isBal ? '这段时间还没有采样' : '这段时间还没有消费记录')
@@ -1826,16 +1876,15 @@ function updateChart(m, series) {
   const meta = document.getElementById('trendMeta');
   if (meta) {
     const bits = [];
-    if (series.mode === 'daily') {
-      if (isBal && series.days - series.has > 0) bits.push(`${series.days - series.has} 天没有采样，按之前的余额平推`);
-      else if (!isBal && series.officialDays) bits.push(`其中 ${series.officialDays} 天取自官方用量`);
-    } else if (isBal) {
-      if (series.changes) bits.push(`${series.changes} 次余额变动`);
-      if (series.gap) bits.push('起点含隔夜缺口');
-    } else if (series.steps) {
-      bits.push(`每 ${money(0.01, store.cur)} 一档 · ${series.steps} 笔`);
-      if (series.gap) bits.push('起点含隔夜缺口');
+    if (series.mode === 'bucket') {
+      const span = series.step >= DAY ? `${Math.round(series.step / DAY)} 天`
+        : series.step >= HOUR ? `${Math.round(series.step / HOUR)} 小时`
+          : `${Math.round(series.step / 60000)} 分钟`;
+      bits.push(`点数过多，按 ${span}聚合`);
     }
+    if (isBal && series.changes) bits.push(`${series.changes} 次余额变动`);
+    if (!isBal && series.steps) bits.push(`每 ${money(0.01, store.cur)} 一档 · ${series.steps} 笔`);
+    if (series.gap) bits.push('起点含隔夜缺口');
     meta.textContent = bits.join(' · ');
     meta.hidden = !bits.length;
   }
@@ -1843,7 +1892,7 @@ function updateChart(m, series) {
   if (typeof Chart === 'undefined') return;
 
   // 视图与粒度共同决定坐标轴规则，任一变化都重建；同一组合内只更新数据
-  const key = `${series.view}|${series.mode}`;
+  const key = `${series.view}|${series.mode}|${series.step || 0}`;
   if (!trendChart || builtKey !== key) {
     if (trendChart) { trendChart.destroy(); trendChart = null; }
     trendChart = new Chart(document.getElementById('trendCanvas').getContext('2d'), trendConfig(series));
@@ -1855,7 +1904,6 @@ function updateChart(m, series) {
   const xs = trendChart.options.scales.x;
   xs.min = series.pts.length ? series.pts[0].x : undefined;
   xs.max = series.pts.length ? Math.max(series.now, series.pts[series.pts.length - 1].x) : undefined;
-  xs.ticks.stepSize = tickStep(series.mode, series.pts);
   if (isBal) {
     const b = balanceBounds(series.pts);
     const ys = trendChart.options.scales.y;
