@@ -647,6 +647,7 @@
     color: var(--accent-bright); border-style: solid;
     border-color: rgba(46, 196, 182, 0.4); background: var(--accent-soft);
   }
+  .acc__chip--bad { color: var(--bad); border-color: rgba(239, 107, 98, 0.45); }
   .acc__del {
     flex: none; padding: 3px 9px;
     font: inherit; font-size: 0.72rem; color: var(--ink-3);
@@ -944,7 +945,9 @@ function setKey(key) {
   memoryKey = key || '';
   writeSlot(sessionStorage, KEY_SLOT, memoryKey);
   if (memoryKey) {
-    keyRing.set(fingerprint(memoryKey), memoryKey);
+    const fp = fingerprint(memoryKey);
+    keyRing.set(fp, memoryKey);
+    deadKeys.delete(fp);        // 重新粘过就当它好了，下一轮请求会验证
     saveKeyRing();
   }
 }
@@ -958,6 +961,8 @@ function setKey(key) {
 const RING_SLOT = 'ds_keys';
 const RING_SAVED_SLOT = 'ds_keys_saved';
 let keyRing = new Map();          // 指纹 -> Key；Key 从不进档案，也不渲染到 DOM
+// 被接口拒绝过（401）的指纹：只用来标注与跳过，不删 Key——历史还看得见，重粘贴即恢复
+const deadKeys = new Set();
 
 const accName = rec => rec.name || rec.userTag || `账户 ${rec.k.slice(0, 6)}`;
 
@@ -1078,7 +1083,9 @@ function describeKey() {
   return [
     `当前：${name} · ${maskKey(key)}（指纹 ${fingerprint(key)}）`,
     store.s.length ? `本地历史 ${store.s.length} 条 · ${store.cur} · 最后采样 ${clock(last.t)}` : '尚无本地历史',
-    remembersKey() ? 'Key 已记住：下次打开本页面自动刷新' : 'Key 只在当前标签页，关闭后需重新填写',
+    deadKeys.has(store.k)
+      ? '这个 Key 已被接口拒绝（401），请重新粘贴一个有效的 Key'
+      : remembersKey() ? 'Key 已记住：下次打开本页面自动刷新' : 'Key 只在当前标签页，关闭后需重新填写',
   ].join('\n');
 }
 
@@ -1169,6 +1176,11 @@ function switchAccount(key) {
   renderAccounts();
   updateAccountPicker();
   render();
+  if (deadKeys.has(rec.k)) {
+    // 这个 Key 之前已确认失效：只展示历史，不打接口、不弹窗、也不排轮询
+    setStatus(`已切到「${accName(rec)}」· 它的 Key 已失效，现在看到的是历史数据（点 ⚙ 重新粘贴，或点 ↻ 重试）`, 'error');
+    return;
+  }
   // 上一次请求还在飞：等它落地再刷，别把切换后的第一次采集丢掉
   if (inflight) schedule(1500); else doRefresh();
   setStatus(`已切到「${accName(rec)}」`);
@@ -1187,7 +1199,8 @@ function updateAccountPicker() {
     const opt = document.createElement('option');
     opt.value = row.key;
     const bg = row.rec.bg ? ' · 后台' : '';
-    opt.textContent = `${row.title}${bg}${keyRing.has(row.rec.k) || row.active ? '' : '（需 Key）'}`;
+    const tail = row.dead ? ' · Key 失效' : (keyRing.has(row.rec.k) || row.active ? '' : ' · 需 Key');
+    opt.textContent = `${row.title}${bg}${tail}`;
     opt.disabled = !row.active && !keyRing.has(row.rec.k);
     if (row.active) opt.selected = true;
     frag.append(opt);
@@ -1226,6 +1239,14 @@ function renderAccounts() {
     main.append(meta);
 
     li.append(main);
+
+    if (row.dead) {
+      const warn = document.createElement('span');
+      warn.className = 'acc__chip acc__chip--bad';
+      warn.textContent = 'Key 失效';
+      warn.title = '这个账户的 Key 被接口拒绝（401）：重新粘贴一个有效的 Key，或删掉这份档案';
+      li.append(warn);
+    }
 
     if (row.active) {
       const chip = document.createElement('span');
@@ -1492,6 +1513,7 @@ function accountRows() {
       return {
         key, rec,
         active: rec === store,
+        dead: deadKeys.has(rec.k),
         title: rec.name || rec.userTag || `账户 ${rec.k.slice(0, 6)}`,
         meta: [
           rec.cur,
@@ -1499,7 +1521,8 @@ function accountRows() {
           days.size ? `${days.size} 天` : '无数据',
           s.length ? money(s[s.length - 1].b, rec.cur) : '—',
           rec.lastPoll ? `${clock(rec.lastPoll)} 更新` : '未连接',
-        ].join(' · '),
+          deadKeys.has(rec.k) ? 'Key 失效' : '',
+        ].filter(Boolean).join(' · '),
       };
     })
     .sort((a, b) => (b.active - a.active) || (b.rec.lastPoll - a.rec.lastPoll));
@@ -3139,7 +3162,7 @@ function pickWallet(wallets, prefer) {
 // 手动刷新：直接触发一次采集，并在完成后重新计时，避免紧接着又自动刷新一次
 function manualRefresh() {
   if (inflight) return setStatus('正在刷新，请稍候…', 'busy');
-  doRefresh();
+  doRefresh(true);
 }
 
 // 每个 Key 一个请求；并发失败要各自退避，所以错误带上 status 交给调用方处理
@@ -3165,12 +3188,17 @@ async function fetchBalance(key) {
   }
 }
 
-async function doRefresh() {
+async function doRefresh(force = false) {
   if (inflight) return;                      // 防止慢请求与下一次轮询叠加
   const key = getKey();
   if (!key) {
     setStatus('请设置 API Key', 'error');
     openSettings();
+    return;
+  }
+  // 已确认失效的 Key 不再被动重试（省请求、也免得状态栏反复跳），手动刷新才试
+  if (!force && deadKeys.has(fingerprint(key))) {
+    schedule(pollInterval());
     return;
   }
 
@@ -3188,6 +3216,7 @@ async function doRefresh() {
     info.others = parsed.wallets.filter(w => w.cur !== info.cur);
 
     recordSample(info.total, info.cur, key);
+    if (deadKeys.delete(fingerprint(key))) { renderAccounts(); updateAccountPicker(); }
     render(info);
 
     const t = new Date();
@@ -3199,9 +3228,13 @@ async function doRefresh() {
     setStatus(msg, info.available ? false : 'error');
   } catch (err) {
     if (err.status === 401) {
-      nextDelay = 0;                         // Key 失效就停轮询，避免持续打接口
-      setStatus('Key 无效或已失效，已暂停自动刷新', 'error');
-      openSettings();
+      // 不要弹设置面板：切账户时被动打断体验很差，而且面板开着就不会自己关。
+      // 只标记这个账户的 Key 失效，把提示留在状态栏与账户列表里。
+      deadKeys.add(fingerprint(key));
+      nextDelay = 0;                         // 这个 Key 不再自动重试，避免空打接口
+      setStatus(`「${accName(store)}」的 Key 已失效或被撤销，已停止自动刷新；切到其它账户，或点 ⚙ 重新粘贴`, 'error');
+      renderAccounts();
+      updateAccountPicker();
     } else if (err.status === 429) {
       // 限流时退到 5 分钟起，连续触发最长退到 15 分钟，不空转打接口
       nextDelay = Math.min(Math.max(pollInterval() * 5, POLL_HIDDEN), 15 * 60 * 1000);
@@ -3271,7 +3304,11 @@ async function pollBackground() {
         bgBackoff.delete(fp);
       } catch (err) {
         if (err.status === 429) bgBackoff.set(fp, Date.now() + 15 * 60 * 1000);
-        else if (err.status === 401) bgBackoff.set(fp, Date.now() + 60 * 60 * 1000);
+        else if (err.status === 401) {
+          deadKeys.add(fp);                  // 失效就别再每小时试一次，UI 上标出来
+          bgBackoff.delete(fp);
+          touched = true;                    // 触发一次列表重绘
+        }
         else bgBackoff.set(fp, Date.now() + POLL_BG);
       }
       await new Promise(done => setTimeout(done, gap));
