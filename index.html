@@ -215,6 +215,12 @@
   .ledger__cell { display: flex; flex-direction: column; gap: 6px; padding: 18px 20px; }
   .ledger__cell + .ledger__cell { border-left: 1px solid var(--line); }
   .ledger__label { font-size: 0.73rem; letter-spacing: 0.06em; color: var(--ink-3); }
+  .ledger__label--act {
+    align-self: flex-start; padding: 0; border: 0; background: none;
+    font-family: inherit; line-height: inherit; text-align: left;
+    cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px;
+  }
+  .ledger__label--act:hover, .ledger__label--act:focus-visible { color: var(--ink); }
   .ledger__value {
     font-size: 1.55rem;
     font-weight: 500;
@@ -808,7 +814,7 @@
       <span class="ledger__note" id="todayConsumeSub">跨日缺口会记入重开页面的那一天</span>
     </div>
     <div class="ledger__cell">
-      <span class="ledger__label">日均消耗</span>
+      <button type="button" class="ledger__label ledger__label--act" id="avgDailyLabel" onclick="setRateWindow()" title="切换统计区间：全部 / 近 7 天 / 近 24 小时">日均消耗 · 全部</button>
       <span class="ledger__value" id="avgDaily">--</span>
       <span class="ledger__note" id="avgDailySub">需要至少两次采样才能估算</span>
     </div>
@@ -1466,6 +1472,59 @@ function perDayMap(samples) {
   return perDay;
 }
 
+// ===== 日均速率 =====
+// 分母不能是"日历天数"。只有 1.3 小时的采样除以 5 个日历日，日均会被稀释成 1/90，
+// "预计可用"跟着膨胀到几百天。这里改用"消费实际累积的跨度"：
+// 页面关闭期间的消费会在重开时以一次差值出现，而跨度本来就覆盖那段时间，
+// 所以这个口径既不会漏掉缺口，也不会把没花钱的时间重复计入。
+const RATE_SLOT = 'ds_rate_window';
+const MIN_RATE_SPAN = 15 * 60000;          // 更短的跨度不给速率：两个点除出来全是噪音
+const SHORT_RATE_SPAN = 6 * 3600000;       // 更短的跨度，预测只当参考
+const RATE_WINDOWS = [
+  { id: 'all', label: '全部' },
+  { id: '7d', label: '近 7 天', ms: 7 * 24 * 3600000 },
+  { id: '24h', label: '近 24 小时', ms: 24 * 3600000 },
+];
+const readRateWindow = () => {
+  try { return RATE_WINDOWS.some(w => w.id === localStorage.getItem(RATE_SLOT)) ? localStorage.getItem(RATE_SLOT) : 'all'; } catch { return 'all'; }
+};
+let rateWindow = readRateWindow();
+
+// 窗口以"最后一次采样"为锚点往前取：长期没打开时，"近 24 小时"里本来就没有采样
+function rateSpan(samples) {
+  const w = RATE_WINDOWS.find(x => x.id === rateWindow) || RATE_WINDOWS[0];
+  const out = { window: w.id, label: w.label, spend: 0, spanMs: 0 };
+  if (!samples || samples.length < 2) return out;
+
+  const end = samples[samples.length - 1].t;
+  const floor = w.ms ? end - w.ms : -Infinity;
+  let first = samples.length - 1;
+  while (first > 0 && samples[first - 1].t >= floor) first--;
+  let spend = 0;
+  for (let i = first + 1; i < samples.length; i++) {
+    const delta = +(samples[i].b - samples[i - 1].b).toFixed(2);
+    if (delta < 0) spend = +(spend - delta).toFixed(2);
+  }
+  return { ...out, spend, spanMs: end - samples[first].t };
+}
+
+// 跨度用最贴近的量级表达：42 分钟 / 1.3 小时 / 2.4 天
+const fmtSpan = ms => {
+  if (!(ms > 0)) return '0 分钟';
+  const min = Math.round(ms / 60000);
+  if (min < 60) return `${min} 分钟`;
+  const hours = ms / 3600000;
+  if (hours < 24) return `${hours < 10 ? hours.toFixed(1) : Math.round(hours)} 小时`;
+  return `${(ms / 86400000).toFixed(1)} 天`;
+};
+
+function setRateWindow() {
+  const idx = RATE_WINDOWS.findIndex(w => w.id === rateWindow);
+  rateWindow = RATE_WINDOWS[(idx + 1) % RATE_WINDOWS.length].id;
+  try { localStorage.setItem(RATE_SLOT, rateWindow); } catch { /* 忽略：不影响本次查看 */ }
+  render();
+}
+
 function analyze(samples) {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
@@ -1489,10 +1548,8 @@ function analyze(samples) {
     if (c.source === 'official') officialDays++;
   }
 
-  // 分母从"第一天有数据"算到今天；官方数据也能把"页面没打开的那天"补成有数据
-  const firstIdx = daily.findIndex(d => d.has);
-  const daysCounted = firstIdx >= 0 ? lastDay - firstIdx : 1;
   const today = daily[daily.length - 1];
+  const rate = rateSpan(samples);
 
   // ---- 最近 7 天：给"短期趋势"用，跨月也能连续 ----
   const week = [];
@@ -1504,8 +1561,8 @@ function analyze(samples) {
   }
 
   return {
-    monthSpend, monthCredit, daily, week, daysCounted,
-    avgDaily: monthSpend / daysCounted, officialDays,
+    monthSpend, monthCredit, daily, week, rate,
+    officialDays,
     todaySpend: today ? today.spend : 0,
     todaySource: today ? today.source : 'none',
     todayObserved: today ? today.observed : 0,
@@ -2044,22 +2101,40 @@ function render(info) {
   // 只标"有几天是官方口径"，避免整月被误读为精确值
   if (m.officialDays > 0) monthSub.push(`官方 ${m.officialDays}/${new Date().getDate()} 天`);
   if (m.monthCredit > 0) monthSub.push(`期间充值 ${money(m.monthCredit, cur)}`);
+  const stale = staleStamp();
+  if (stale) monthSub.push(stale);
   document.getElementById('monthConsumeSub').textContent = monthSub.join(' · ');
-  setMoney('todayConsume', m.todaySpend, cur);
+
+  // 今天没采样就不该显示 ¥0.00——那读起来像"今天没花钱"，其实是什么都不知道
+  if (m.todaySource === 'none') {
+    document.getElementById('todayConsume').textContent = '—';
+  } else {
+    setMoney('todayConsume', m.todaySpend, cur);
+  }
   // 主数字只给一个：官方与观测取较大值，另一个降级成备注
-  const today = sampleSeries(startOfDay(Date.now()), Date.now());
+  const dayStart = startOfDay(Date.now());
+  const today = sampleSeries(dayStart, Date.now());
+  const todaySamples = store.s.filter(e => e.t >= dayStart);
+  const todaySpan = todaySamples.length > 1
+    ? todaySamples[todaySamples.length - 1].t - todaySamples[0].t
+    : 0;
   document.getElementById('todayConsumeSub').textContent = m.todaySource === 'official'
     ? (m.todayObserved > 0
       ? `官方口径 · 页面观测到 ${money(m.todayObserved, cur)}`
       : '今日暂无观测采样，取自官方用量')
-    : today.steps > 0
-      ? `每 ${money(0.01, cur)} 一档 · 最近一笔 ${clock(today.lastAt)}`
-      : '页面打开后开始采样';
-  // 样本不足时"日均"就是今天一天的平均，给数字会和"本日消费"重复，看起来像算错了
-  const enough = m.daysCounted >= 3 && m.daily.some(d => d.has);
-  if (enough) setMoney('avgDaily', m.avgDaily, cur);
+    : m.todaySource === 'none'
+      ? '今天还没有采样 · 打开页面后才开始记录'
+      : today.steps > 0
+        ? `每 ${money(0.01, cur)} 一档 · 最近一笔 ${clock(today.lastAt)}`
+        : `已观测 ${fmtSpan(todaySpan)} · 这段时间没有消费`;
+
+  // 日均：分母是实际观测跨度，不是日历天数（见 rateSpan）
+  const r = m.rate;
+  document.getElementById('avgDailyLabel').textContent = `日均消耗 · ${r.label}`;
+  const perDay = r.spanMs >= MIN_RATE_SPAN ? r.spend / (r.spanMs / 86400000) : 0;
+  if (perDay > 0) setMoney('avgDaily', perDay, cur);
   else document.getElementById('avgDaily').textContent = '—';
-  document.getElementById('avgDailySub').textContent = avgNote(m, total, cur);
+  document.getElementById('avgDailySub').textContent = rateSub(m, total, cur);
 
   updateChart(m, trendSeries());
   document.getElementById('pollNote').textContent = pollInterval() / 60000;
@@ -2068,19 +2143,40 @@ function render(info) {
   maybeNotifyLowBalance(total, cur, info);
 }
 
-// 余额精度只有 2 位小数：日均的误差是 ±0.01/天数，因此"预计可用"只能给区间
-function avgNote(m, total, cur) {
-  // 官方 CSV 能把"页面没打开的天"补成有数据，这时不再依赖采样条数
-  if (!m.daily.some(d => d.has) || !(m.avgDaily > 0)) return '暂无消费数据，无法估算';
-  // 一两天样本撑不起任何预测：宁可承认样本不足，也不给"228–230 天"这种伪精度
-  if (m.daysCounted < 3) return `样本不足（${m.daysCounted} 天），攒满 3 天才给预估`;
-  const err = 0.01 / Math.max(1, m.daysCounted);
-  const fastest = m.avgDaily + err;
-  const slowest = Math.max(err, m.avgDaily - err);
-  const hi = Math.floor(total / slowest);
-  const lo = Math.floor(total / fastest);
-  const span = hi > lo ? `${lo}–${hi}` : `${lo}`;
-  return `预计可用 ${span} 天 · 按 ${money(m.avgDaily, cur)}/天 估算`;
+// 数据多久没更新了：超过 3 个采样周期就明确标出"截至某刻"，别让旧快照冒充实时
+function staleStamp() {
+  const last = store.s[store.s.length - 1];
+  if (!last) return '';
+  const idle = Date.now() - last.t;
+  if (idle < Math.max(3 * pollInterval(), 15 * 60000)) return '';
+  return `数据截至 ${md(last.t)} ${hm(last.t)}`;
+}
+
+// 日均卡片：值统一折算成"每天"，副标题负责说明窗口、覆盖时长和可信度
+function rateSub(m, total, cur) {
+  const r = m.rate;
+  const stale = staleStamp();
+  const lead = stale ? `${stale} · ` : '';
+  if (!store.s.length) return '页面打开后开始采样';
+  if (r.spanMs < MIN_RATE_SPAN) {
+    return r.window === 'all'
+      ? `${lead}采样只有 ${fmtSpan(r.spanMs)}，攒够 15 分钟再估算`
+      : `${lead}${r.label}内没有采样 · 点标题切回全部`;
+  }
+
+  const perDay = r.spend / (r.spanMs / 86400000);
+  if (!(perDay > 0)) return `${lead}${r.window === 'all' ? '这段时间' : r.label}没有消费`;
+  // 0.01 的读数误差落在窗口总额上，折算成速率后按跨度缩放
+  const err = 0.01 / (r.spanMs / 86400000);
+  const hi = Math.floor(total / Math.max(err, perDay - err));
+  const lo = Math.floor(total / (perDay + err));
+  const days = hi > lo ? `${lo}–${hi}` : `${lo}`;
+
+  if (r.spanMs < SHORT_RATE_SPAN) {
+    const perHour = r.spend / (r.spanMs / 3600000);
+    return `${lead}观测 ${fmtSpan(r.spanMs)}（${money(perHour, cur)}/小时）· 按此速率约 ${days} 天，仅供参考`;
+  }
+  return `${lead}预计可用 ${days} 天 · 覆盖 ${fmtSpan(r.spanMs)}`;
 }
 
 // ===== 峰谷时段（官方：空闲价是高峰价的一半）=====
