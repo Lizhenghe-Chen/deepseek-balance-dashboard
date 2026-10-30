@@ -146,6 +146,24 @@
     text-transform: uppercase;
     color: var(--ink-3);
   }
+  .balance__head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .balance__head .balance__label { margin-bottom: 0; }
+  .pick { position: relative; display: inline-flex; align-items: center; margin-bottom: 0; }
+  .pick__sel {
+    appearance: none; -webkit-appearance: none;
+    height: 24px; max-width: 15em; padding: 0 22px 0 9px;
+    font: 500 0.72rem/1 var(--sans); color: var(--ink-2);
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px;
+    cursor: pointer; text-overflow: ellipsis;
+  }
+  .pick__sel:hover, .pick__sel:focus-visible { color: var(--ink); border-color: var(--line-2); }
+  .pick__sel option { background: var(--surface-2); color: var(--ink); }
+  .pick__chev {
+    position: absolute; right: 7px; width: 10px; height: 10px;
+    color: var(--ink-3); pointer-events: none;
+  }
+  .balance__main .balance__label { margin-bottom: 0; }
+  .balance__head + .balance__amount { margin-top: 10px; }
   .balance__amount {
     display: flex;
     align-items: baseline;
@@ -610,6 +628,25 @@
     border: 1px solid rgba(46, 196, 182, 0.4); border-radius: 999px;
     font-size: 0.68rem; color: var(--accent-bright);
   }
+  .acc__go {
+    flex: none; padding: 3px 9px;
+    font: inherit; font-size: 0.72rem; color: var(--accent-bright);
+    background: none; border: 1px solid rgba(46, 196, 182, 0.35); border-radius: 6px; cursor: pointer;
+    transition: background-color 0.16s var(--ease), border-color 0.16s var(--ease);
+  }
+  .acc__go:hover:not(:disabled) { background: var(--accent-soft); border-color: rgba(46, 196, 182, 0.55); }
+  .acc__go:disabled { color: var(--ink-3); border-color: var(--line); cursor: not-allowed; }
+  .acc__bg {
+    flex: none; padding: 3px 8px;
+    font: inherit; font-size: 0.7rem; color: var(--ink-3);
+    background: none; border: 1px dashed var(--line-2); border-radius: 6px; cursor: pointer;
+    transition: color 0.16s var(--ease), border-color 0.16s var(--ease), background-color 0.16s var(--ease);
+  }
+  .acc__bg:hover { color: var(--ink-2); border-color: var(--ink-3); }
+  .acc__bg.is-on {
+    color: var(--accent-bright); border-style: solid;
+    border-color: rgba(46, 196, 182, 0.4); background: var(--accent-soft);
+  }
   .acc__del {
     flex: none; padding: 3px 9px;
     font: inherit; font-size: 0.72rem; color: var(--ink-3);
@@ -721,13 +758,13 @@
       <input type="password" id="apiKeyInput" class="sheet__input" placeholder="sk-... 留空表示不修改" autocomplete="new-password" spellcheck="false">
       <label class="sheet__check">
         <input type="checkbox" id="rememberKey" onchange="setRememberKey(this.checked)">
-        <span>在此浏览器记住 Key<div class="sheet__check-hint">勾选后明文 Key 会存进本机 localStorage，新开标签页直接刷新；共用电脑请勿勾选。</div></span>
+        <span>记住这个账户的 Key，并在后台继续采样<div class="sheet__check-hint">勾选后该账户的明文 Key 会写进本机 localStorage，切过去看数据、或下次打开页面都无需重新粘贴；共用电脑请勿勾选。</div></span>
       </label>
     </div>
     <div class="sheet__accounts" id="accountList" hidden>
       <span class="sheet__field">账户历史（每个 Key 一份，互不影响）</span>
       <ul class="acc-list" id="accItems"></ul>
-      <p class="sheet__note">粘贴某个账户的 Key 就会切回它的历史。同一账户的多个 Key 共享同一个余额池，<b>不要把它们的消费相加</b>。</p>
+      <p class="sheet__note">点「切换」即可换账户，不用重新粘贴 Key（本标签页用过的 Key 会留到关闭为止；勾了「后台」的账户即使关掉页面也记得）。想给某个账户加后台采样，先粘贴它一次。<b>同一账户的多个 Key 共享同一个余额池，不要把它们的消费相加</b>。</p>
     </div>
     <div class="sheet__alert">
       <span class="sheet__field">低余额提醒</span>
@@ -783,7 +820,13 @@
 
   <section class="balance" id="balanceCard">
     <div class="balance__main">
-      <span class="balance__label">账户余额</span>
+      <div class="balance__head">
+        <span class="balance__label">账户余额</span>
+        <span class="pick" id="accountPickerWrap" hidden>
+          <select class="pick__sel" id="accountPicker" onchange="switchAccount(this.value)" title="切换账户（已记住 Key 的账户可直接切换）"></select>
+          <svg class="pick__chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        </span>
+      </div>
       <div class="balance__amount">
         <span class="balance__cur" id="balanceCur">¥</span><span class="balance__value" id="totalBalance">--</span>
       </div>
@@ -883,7 +926,6 @@ const API_URL = 'https://api.deepseek.com/user/balance';
 // 「记住 Key」后才写 localStorage，新标签页就能直接刷新。
 const KEY_SLOT = 'ds_api_key';            // sessionStorage：本标签页
 const KEY_PERSIST_SLOT = 'ds_api_key_saved';   // localStorage：仅勾选「记住 Key」时
-const REMEMBER_SLOT = 'ds_remember_key';  // localStorage：是否记住（偏好）
 const readSlot = (area, slot) => { try { return area.getItem(slot) || ''; } catch { return ''; } };
 const writeSlot = (area, slot, v) => {
   try {
@@ -892,7 +934,8 @@ const writeSlot = (area, slot, v) => {
   } catch { /* 存储不可用（隐私模式 / 配额满）时降级为仅内存 */ }
 };
 
-const remembersKey = () => readSlot(localStorage, REMEMBER_SLOT) === '1';
+// 是否有"记住的 Key"：由当前账户的 bg 标记决定（见下方 Key 环）
+const remembersKey = () => !!(store && store.bg);
 let memoryKey = readSlot(sessionStorage, KEY_SLOT) || readSlot(localStorage, KEY_PERSIST_SLOT);
 
 const getKey = () => memoryKey;
@@ -900,20 +943,104 @@ const getKey = () => memoryKey;
 function setKey(key) {
   memoryKey = key || '';
   writeSlot(sessionStorage, KEY_SLOT, memoryKey);
-  if (!memoryKey) writeSlot(localStorage, KEY_PERSIST_SLOT, '');
-  else if (remembersKey()) writeSlot(localStorage, KEY_PERSIST_SLOT, memoryKey);
+  if (memoryKey) {
+    keyRing.set(fingerprint(memoryKey), memoryKey);
+    saveKeyRing();
+  }
 }
 
-// 「记住 Key」开关：关掉时立刻把磁盘上的明文删掉，当前标签页继续用内存里的
+// ===== Key 环：多 Key 免输入切换 + 后台采样 =====
+// 档案（ds_history_v3）里只有 djb2 指纹、没有 Key，所以"切回某个账户"必须能拿到 Key。
+// Key 环就是这张 指纹 → Key 的表，分两层放：
+//   · sessionStorage ds_keys       —— 本标签页用过的 Key，关掉标签页即清空（默认）
+//   · localStorage  ds_keys_saved —— 只有账户勾了「记住并在后台采样」才会写（rec.bg）
+// 也就是说：你勾了几个账户，磁盘上就有几个明文 Key，其余只在内存里。
+const RING_SLOT = 'ds_keys';
+const RING_SAVED_SLOT = 'ds_keys_saved';
+let keyRing = new Map();          // 指纹 -> Key；Key 从不进档案，也不渲染到 DOM
+
+const accName = rec => rec.name || rec.userTag || `账户 ${rec.k.slice(0, 6)}`;
+
+function loadKeyRing() {
+  keyRing = new Map();
+  const areas = [
+    [sessionStorage, RING_SLOT],
+    [localStorage, RING_SAVED_SLOT],
+  ];
+  for (const [area, slot] of areas) {
+    try {
+      const obj = JSON.parse(area.getItem(slot) || '{}');
+      for (const [fp, key] of Object.entries(obj || {})) if (fp && key) keyRing.set(fp, key);
+    } catch { /* 坏数据就跳过，不影响启动 */ }
+  }
+  // 旧版单个「记住 Key」并进来：语义等于"这个账户记住了"，升级后不用重新粘贴
+  const legacy = readSlot(localStorage, KEY_PERSIST_SLOT);
+  if (legacy) {
+    const fp = fingerprint(legacy);
+    keyRing.set(fp, legacy);
+    const rec = Object.values(accounts).find(r => r.k === fp);
+    if (rec) rec.bg = true;
+    writeSlot(localStorage, KEY_PERSIST_SLOT, '');
+    saveKeyRing();
+  }
+}
+
+function saveKeyRing() {
+  const sess = {};
+  const bgFps = new Set(Object.values(accounts).filter(r => r.bg).map(r => r.k));
+  const saved = {};
+  for (const [fp, key] of keyRing) {
+    sess[fp] = key;
+    if (bgFps.has(fp)) saved[fp] = key;
+  }
+  writeSlot(sessionStorage, RING_SLOT, JSON.stringify(sess));
+  writeSlot(localStorage, RING_SAVED_SLOT, Object.keys(saved).length ? JSON.stringify(saved) : '');
+}
+
+// 能参与后台采样的账户：勾了 bg、且环里有它的 Key、且不是当前正在显示的那个
+const bgAccounts = () => Object.values(accounts).filter(r => r.bg && r !== store && keyRing.has(r.k));
+
+// 「记住 Key 并在后台采样」开关（作用于当前账户）
 function setRememberKey(on) {
-  writeSlot(localStorage, REMEMBER_SLOT, on ? '1' : '');
-  if (on) writeSlot(localStorage, KEY_PERSIST_SLOT, memoryKey);
-  else writeSlot(localStorage, KEY_PERSIST_SLOT, '');
+  store.bg = !!on;
+  if (store.k && memoryKey) {
+    if (on) keyRing.set(store.k, memoryKey);
+    saveKeyRing();
+  }
+  writeSlot(localStorage, KEY_PERSIST_SLOT, '');   // 旧槽位由 Key 环接管，别留两份明文
+  saveAccounts();
+  renderAccounts();
+  updateAccountPicker();
+  scheduleBackground(true);
+}
+
+// 单独给某个账户开 / 关后台采样（设置面板里每行的开关）
+function toggleBg(key) {
+  const rec = accounts[key];
+  if (!rec) return;
+  if (!rec.bg && !keyRing.has(rec.k)) {
+    setStatus('这个账户的 Key 不在本标签页里：先粘贴它一次，才能开后台采样', 'error');
+    openSettings();
+    return;
+  }
+  rec.bg = !rec.bg;
+  saveKeyRing();
+  saveAccounts();
+  if (rec === store) document.getElementById('rememberKey').checked = rec.bg;
+  renderAccounts();
+  updateAccountPicker();
+  scheduleBackground(true);
+  setStatus(rec.bg
+    ? `「${accName(rec)}」已加入后台采样：关掉页面也会在下一次打开时补齐，其他账户切换无需再输入 Key`
+    : `「${accName(rec)}」已停止后台采样，Key 也从本机删除（本标签页内仍可切换）`);
 }
 
 // 清理旧版本遗留在 localStorage 中的明文 Key（旧版用过同一个 key 名）
 function purgeLegacyKey() {
-  try { localStorage.removeItem('ds_api_key'); } catch { /* ignore */ }
+  try {
+    localStorage.removeItem('ds_api_key');          // 旧版把明文写在了 localStorage
+    localStorage.removeItem('ds_remember_key');     // 旧版"是否记住"偏好，已由账户的 bg 标记取代
+  } catch { /* ignore */ }
 }
 
 function modalError(msg) {
@@ -991,9 +1118,19 @@ function saveKey() {
 }
 
 function clearKey() {
+  const fp = store && store.k;
   setKey('');
+  if (fp) {
+    keyRing.delete(fp);          // 清除 = 连本标签页的环里也不留
+    if (store) store.bg = false;
+    saveKeyRing();
+    saveAccounts();
+    renderAccounts();
+    updateAccountPicker();
+    scheduleBackground();
+  }
   closeSettings();
-  setStatus('已清除 Key。各账户的历史仍留在本地，重新粘贴对应 Key 即可继续');
+  setStatus('已清除 Key（本机也不再保存）。各账户的历史仍留在本地，重新粘贴对应 Key 即可继续');
 }
 
 function openSettings() {
@@ -1014,6 +1151,51 @@ function openSettings() {
 }
 
 // 账户列表：名字可改，可逐个删除；当前账户贴了 Key 才是"在用"的那个
+// 切到另一个账户：环里有它的 Key 就直接切，不用再粘贴
+function switchAccount(key) {
+  const rec = accounts[key];
+  if (!rec || rec === store) return;
+  const k = keyRing.get(rec.k);
+  if (!k) {
+    setStatus(`「${accName(rec)}」的 Key 不在本标签页：粘贴它一次之后就能直接切换`, 'error');
+    openSettings();
+    return;
+  }
+  accounts[keyOf(store)] = store;      // 当前账户先归位，避免指针丢档
+  memoryKey = k;
+  writeSlot(sessionStorage, KEY_SLOT, k);
+  store = rec;
+  saveAccounts();
+  renderAccounts();
+  updateAccountPicker();
+  render();
+  // 上一次请求还在飞：等它落地再刷，别把切换后的第一次采集丢掉
+  if (inflight) schedule(1500); else doRefresh();
+  setStatus(`已切到「${accName(rec)}」`);
+}
+
+// 主卡上的账户切换器：账户多于一个时才出现，缺 Key 的项禁用并标注
+function updateAccountPicker() {
+  const sel = document.getElementById('accountPicker');
+  const wrap = document.getElementById('accountPickerWrap');
+  if (!sel || !wrap) return;
+  const rows = accountRows();
+  wrap.hidden = rows.length < 2;
+  if (rows.length < 2) return;
+  const frag = document.createDocumentFragment();
+  for (const row of rows) {
+    const opt = document.createElement('option');
+    opt.value = row.key;
+    const bg = row.rec.bg ? ' · 后台' : '';
+    opt.textContent = `${row.title}${bg}${keyRing.has(row.rec.k) || row.active ? '' : '（需 Key）'}`;
+    opt.disabled = !row.active && !keyRing.has(row.rec.k);
+    if (row.active) opt.selected = true;
+    frag.append(opt);
+  }
+  sel.replaceChildren(frag);
+  sel.setAttribute('aria-label', `切换账户（当前 ${rows.find(r => r.active)?.title || ''}）`);
+}
+
 function renderAccounts() {
   const list = document.getElementById('accItems');
   const wrap = document.getElementById('accountList');
@@ -1050,7 +1232,28 @@ function renderAccounts() {
       chip.className = 'acc__chip';
       chip.textContent = '当前';
       li.append(chip);
+    } else {
+      const hasKey = keyRing.has(row.rec.k);
+      const go = document.createElement('button');
+      go.type = 'button';
+      go.className = 'acc__go';
+      go.textContent = '切换';
+      go.disabled = !hasKey;
+      go.title = hasKey ? '切到这份历史，无需重新输入 Key' : '这个账户的 Key 不在本标签页，粘贴一次后才能切换';
+      go.addEventListener('click', () => switchAccount(row.key));
+      li.append(go);
     }
+
+    const bg = document.createElement('button');
+    bg.type = 'button';
+    bg.className = 'acc__bg' + (row.rec.bg ? ' is-on' : '');
+    bg.textContent = row.rec.bg ? '后台' : '仅历史';
+    bg.setAttribute('aria-pressed', String(!!row.rec.bg));
+    bg.title = row.rec.bg
+      ? '正在后台采样并记住 Key，点一下关闭'
+      : '勾上后即使不显示这个账户也会继续采样，并把 Key 记在本机';
+    bg.addEventListener('click', () => toggleBg(row.key));
+    li.append(bg);
 
     const del = document.createElement('button');
     del.type = 'button';
@@ -1167,7 +1370,7 @@ const accKey = fp => `${fp}|${store ? store.cur : 'CNY'}`;
 const keyOf = rec => `${rec.k}|${rec.cur}`;
 
 function blankAccount(fp, cur) {
-  return { k: fp, name: '', userTag: '', cur: cur || 'CNY', lastPoll: 0, s: [], at: Date.now() };
+  return { k: fp, name: '', userTag: '', cur: cur || 'CNY', lastPoll: 0, s: [], at: Date.now(), bg: false };
 }
 
 function sanitizeAccount(rec, fp) {
@@ -1178,6 +1381,7 @@ function sanitizeAccount(rec, fp) {
     cur: rec.cur === 'USD' ? 'USD' : 'CNY',
     lastPoll: Number(rec.lastPoll) || 0,
     at: Number(rec.at) || Date.now(),
+    bg: !!rec.bg,                       // 是否记住 Key 并参与后台采样
     s: Array.isArray(rec.s)
       ? rec.s.filter(e => Number.isFinite(e.t) && Number.isFinite(e.b)).sort((a, b) => a.t - b.t)
       : [],
@@ -1305,6 +1509,11 @@ function deleteAccount(key) {
   const rec = accounts[key];
   if (!rec) return;
   delete accounts[key];
+  // 这个 Key 已经没有账户了：别让明文留在环里
+  if (rec.k && !Object.values(accounts).some(r => r.k === rec.k)) {
+    keyRing.delete(rec.k);
+    saveKeyRing();
+  }
   if (rec === store) {
     store = Object.values(accounts)[0] || blankAccount('', 'CNY');
     if (store.k) accounts[keyOf(store)] = store;
@@ -1342,6 +1551,16 @@ function migrateLegacyHistory(key) {
   try { localStorage.removeItem(LEGACY_KEY); } catch { /* ignore */ }
 }
 
+// 往指定档案里追加一条采样，不碰 store（后台账户采样时也走这里）
+function recordInto(rec, total) {
+  // 每次请求都记一条（余额没变也记），这样曲线的时间刻度就是真实采样时刻；
+  // 只有连续两次请求间隔不足 20 秒且余额未变时才合并，避免手动连点刷屏。余额一变必记。
+  const now = Date.now();
+  const last = rec.s[rec.s.length - 1];
+  if (!last || last.b !== total || now - last.t >= 20 * 1000) rec.s.push({ t: now, b: total });
+  rec.lastPoll = now;
+}
+
 function recordSample(total, cur, key) {
   const fp = fingerprint(key);
   // Key 在页面外被改动，或首次绑定：切到对应档案（各记各的，绝不互相做差）
@@ -1352,12 +1571,7 @@ function recordSample(total, cur, key) {
   }
   store.k = fp;
   store.cur = cur;
-  // 每次请求都记一条（余额没变也记），这样曲线的时间刻度就是真实采样时刻；
-  // 只有连续两次请求间隔不足 20 秒且余额未变时才合并，避免手动连点刷屏。余额一变必记。
-  const now = Date.now();
-  const last = store.s[store.s.length - 1];
-  if (!last || last.b !== total || now - last.t >= 20 * 1000) store.s.push({ t: now, b: total });
-  store.lastPoll = now;
+  recordInto(store, total);
   persist();
 }
 
@@ -2118,6 +2332,7 @@ function render(info) {
   document.getElementById('avgDailySub').textContent = rateSub(m, total, cur);
 
   updateChart(m, trendSeries());
+  updateAccountPicker();
   document.getElementById('pollNote').textContent = pollInterval() / 60000;
   updatePeak();
   renderUsage(m);
@@ -2912,9 +3127,10 @@ function parseBalance(data) {
 }
 
 // 选币种：优先沿用已记录的币种，避免接口数组顺序变化导致币种抖动（抖动会误触发历史重开）
-function pickWallet(wallets) {
+function pickWallet(wallets, prefer) {
   if (!wallets.length) return null;
-  return wallets.find(w => w.cur === store.cur)
+  const cur = prefer || store.cur;
+  return wallets.find(w => w.cur === cur)
       || wallets.find(w => w.topped > 0)
       || wallets.find(w => w.total > 0)
       || wallets[0];
@@ -2924,6 +3140,29 @@ function pickWallet(wallets) {
 function manualRefresh() {
   if (inflight) return setStatus('正在刷新，请稍候…', 'busy');
   doRefresh();
+}
+
+// 每个 Key 一个请求；并发失败要各自退避，所以错误带上 status 交给调用方处理
+const authHeaders = key => ({ Authorization: 'Bearer ' + key, Accept: 'application/json' });
+
+async function fetchBalance(key) {
+  const ctrl = new AbortController();
+  const abortTimer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const resp = await fetch(API_URL, {
+      headers: authHeaders(key),
+      cache: 'no-store',                     // 余额必须实时，禁止命中浏览器缓存
+      signal: ctrl.signal,
+    });
+    if (!resp.ok) {
+      const err = new Error(`HTTP ${resp.status}${HTTP_HINT[resp.status] ? `（${HTTP_HINT[resp.status]}）` : ''}`);
+      err.status = resp.status;
+      throw err;
+    }
+    return parseBalance(await resp.json());
+  } finally {
+    clearTimeout(abortTimer);
+  }
 }
 
 async function doRefresh() {
@@ -2939,31 +3178,10 @@ async function doRefresh() {
   document.getElementById('refreshBtn').classList.add('is-busy');
   if (!store.s.length) document.getElementById('balanceCard').classList.add('is-loading');
   let nextDelay = pollInterval();
-  const ctrl = new AbortController();
-  const abortTimer = setTimeout(() => ctrl.abort(), 15000);
 
   try {
     setStatus('正在刷新…', 'busy');
-    const resp = await fetch(API_URL, {
-      headers: { 'Authorization': `Bearer ${key}`, 'Accept': 'application/json' },
-      cache: 'no-store',                     // 余额必须实时，禁止命中浏览器缓存
-      signal: ctrl.signal,
-    });
-
-    if (resp.status === 401) {
-      nextDelay = 0;                         // Key 失效就停轮询，避免持续打接口
-      setStatus('Key 无效或已失效，已暂停自动刷新', 'error');
-      openSettings();
-      throw SILENT;
-    }
-    if (!resp.ok) {
-      // 限流时退到 5 分钟起，连续触发最长退到 15 分钟，不空转打接口
-      if (resp.status === 429) nextDelay = Math.min(Math.max(pollInterval() * 5, POLL_HIDDEN), 15 * 60 * 1000);
-      const hint = HTTP_HINT[resp.status];
-      throw new Error(`HTTP ${resp.status}${hint ? `（${hint}）` : ''}`);
-    }
-
-    const parsed = parseBalance(await resp.json());
+    const parsed = await fetchBalance(key);
     const info = pickWallet(parsed.wallets);
     if (!info) throw new Error('响应中没有余额信息');
     info.available = parsed.available;
@@ -2980,24 +3198,108 @@ async function doRefresh() {
     currencySwitchedFrom = '';
     setStatus(msg, info.available ? false : 'error');
   } catch (err) {
-    if (err !== SILENT) setStatus(err.name === 'AbortError' ? '请求超时' : err.message, 'error');
+    if (err.status === 401) {
+      nextDelay = 0;                         // Key 失效就停轮询，避免持续打接口
+      setStatus('Key 无效或已失效，已暂停自动刷新', 'error');
+      openSettings();
+    } else if (err.status === 429) {
+      // 限流时退到 5 分钟起，连续触发最长退到 15 分钟，不空转打接口
+      nextDelay = Math.min(Math.max(pollInterval() * 5, POLL_HIDDEN), 15 * 60 * 1000);
+      setStatus(err.message, 'error');
+    } else {
+      setStatus(err.name === 'AbortError' ? '请求超时' : err.message, 'error');
+    }
   } finally {
-    clearTimeout(abortTimer);
     inflight = false;
     document.getElementById('refreshBtn').classList.remove('is-busy');
     document.getElementById('balanceCard').classList.remove('is-loading');
     if (nextDelay) schedule(nextDelay);
+    // 当前账户刚拿到数据，顺手把后台账户也补一次（错开执行，不抢同一秒）
+    scheduleBackground();
+  }
+}
+
+// ===== 后台账户采样 =====
+// 勾了「记住并在后台采样」的账户，即使不是当前显示的那个也会继续记录。
+// 频率比活跃账户低（可见 5 分钟 / 隐藏 15 分钟）：它们的曲线是拿来看趋势的，
+// 没必要为了 ±1 分钟落点付 N 倍的请求量。每个 Key 独立退避，互不拖累。
+const POLL_BG = 5 * 60 * 1000;
+const POLL_BG_HIDDEN = 15 * 60 * 1000;
+const bgBackoff = new Map();      // 指纹 -> 下次允许请求的时间戳
+let bgTimer = 0;
+let bgDueAt = 0;
+let bgRunning = false;
+
+// 注意别把排期往后推：活跃账户每分钟刷新一次，若每次都重置 5 分钟计时，后台就永远不会跑
+function scheduleBackground(soon = false) {
+  if (!bgAccounts().length) {
+    clearTimeout(bgTimer);
+    bgTimer = 0;
+    bgDueAt = 0;
+    return;
+  }
+  const base = document.hidden ? POLL_BG_HIDDEN : POLL_BG;
+  // soon：刚改过开关或刚刷新过，2 秒后补一次，让"勾上就生效"看得见
+  const due = Date.now() + (soon ? 2000 : base);
+  if (bgTimer && !soon && bgDueAt <= due) return;    // 已有更早的排期
+  clearTimeout(bgTimer);
+  bgDueAt = due;
+  bgTimer = setTimeout(pollBackground, Math.max(0, due - Date.now()));
+}
+
+async function pollBackground() {
+  if (bgRunning) return;
+  const targets = bgAccounts();
+  if (!targets.length) return;
+  const gap = document.hidden ? 600 : 1500;   // 每个 Key 之间错开，别在同一瞬间并发
+  bgRunning = true;
+  let touched = false;
+
+  try {
+    for (const fp of [...new Set(targets.map(r => r.k))]) {
+      const key = keyRing.get(fp);
+      if (!key || (bgBackoff.get(fp) || 0) > Date.now()) continue;
+      try {
+        const parsed = await fetchBalance(key);
+        for (const rec of targets.filter(r => r.k === fp)) {
+          const wallet = parsed.wallets.find(w => w.cur === rec.cur);
+          if (!wallet) continue;             // 这个账户的币种这次没返回，跳过而不是记 0
+          recordInto(rec, wallet.total);
+          compactSamples(rec);
+          touched = true;
+        }
+        bgBackoff.delete(fp);
+      } catch (err) {
+        if (err.status === 429) bgBackoff.set(fp, Date.now() + 15 * 60 * 1000);
+        else if (err.status === 401) bgBackoff.set(fp, Date.now() + 60 * 60 * 1000);
+        else bgBackoff.set(fp, Date.now() + POLL_BG);
+      }
+      await new Promise(done => setTimeout(done, gap));
+    }
+  } finally {
+    bgRunning = false;
+    if (touched) {
+      saveAccounts();
+      renderAccounts();
+      updateAccountPicker();
+    }
+    bgTimer = 0;
+    bgDueAt = 0;
+    scheduleBackground();
   }
 }
 
 // ===== 启动 =====
 loadStore();
+loadKeyRing();
+if (store && store.k && keyRing.has(store.k)) memoryKey = memoryKey || keyRing.get(store.k);
 loadUsage();
 purgeLegacyKey();
 initChart();
 bindUsageDrop();
 renderUsage();
 renderViewSwitch();
+updateAccountPicker();
 updatePeak();
 const startKey = getKey();
 migrateLegacyHistory(startKey);
@@ -3011,10 +3313,12 @@ if (startKey) {
   setStatus('请设置 API Key', 'error');
   openSettings();
 }
+scheduleBackground();
 
 // 后台标签页的定时器会被节流，回到前台且已过一个周期就补采一次
 document.addEventListener('visibilitychange', () => {
   updatePeak();
+  scheduleBackground(true);
   if (document.hidden) {
     schedule(POLL_HIDDEN);          // 切到后台就降频，别空转
     return;
