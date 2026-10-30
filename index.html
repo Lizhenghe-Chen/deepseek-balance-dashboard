@@ -1738,10 +1738,11 @@ const fmtSpan = ms => {
   return `${(ms / 86400000).toFixed(1)} 天`;
 };
 
-// 卡片标题用的短跨度：全部 / 近 2 小时 / 近 3 天（窗口被数据长度夹住时仍算"全部"）
+// 卡片标题用的短跨度：全部 / 近 30 分钟 / 近 2 小时 / 近 3 天（窗口被数据长度夹住时仍算"全部"）
 const shortSpan = win => (!viewWindow || win >= dataSpan()
   ? '全部'
-  : win <= SAMPLE_MODE_MAX ? `近 ${Math.max(1, Math.round(win / HOUR))} 小时` : `近 ${Math.round(win / DAY)} 天`);
+  : win < HOUR ? `近 ${Math.max(1, Math.round(win / 60000))} 分钟`
+    : win <= SAMPLE_MODE_MAX ? `近 ${Math.max(1, Math.round(win / HOUR))} 小时` : `近 ${Math.round(win / DAY)} 天`);
 
 function analyze(samples) {
   const now = new Date();
@@ -1793,7 +1794,7 @@ function analyze(samples) {
 // 默认只画"数据实际覆盖的范围"，不做固定一周。曲线始终落在采样上：跨度变大时先保住分钟级落点，
 // 只有点数超出一屏能看清的量级才按整小时/整天降采样（桶内余额取最后一次、消费累加），细节尽量不丢。
 // 缩放以"现在"为右端，− 放大跨度、＋ 收窄。
-const MIN_WINDOW_MS = 2 * 3600 * 1000;
+const MIN_WINDOW_MS = 30 * 60000;
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
 const SAMPLE_MODE_MAX = 30 * HOUR;   // 只影响窗口文案：≤30 小时说"小时"，更长说"天"
@@ -1837,6 +1838,7 @@ function windowLabel(win) {
   if (!viewWindow || win >= full) {
     return full <= SAMPLE_MODE_MAX ? `全部 ${Math.max(1, Math.round(full / HOUR))} 小时` : `全部 ${Math.ceil(full / DAY)} 天`;
   }
+  if (win < HOUR) return `近 ${Math.max(1, Math.round(win / 60000))} 分钟`;
   return win <= SAMPLE_MODE_MAX ? `近 ${Math.max(1, Math.round(win / HOUR))} 小时` : `近 ${Math.round(win / DAY)} 天`;
 }
 
