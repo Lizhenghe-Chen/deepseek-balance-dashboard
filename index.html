@@ -1744,6 +1744,84 @@ const LINE = { spend: '#4fdfd0', balance: '#e8a33d' };
 const FILL = { spend: 'rgba(79,223,208,0.10)', balance: 'rgba(232,163,61,0.07)' };
 const signedMoney = (v, cur) => `${v < 0 ? '−' : '+'}${money(Math.abs(v), cur)}`;
 
+// ===== 命中判定（阶梯线专用）=====
+// Chart.js 自带的 nearest 只比 x 距离：竖直段上下两个点几乎重合时，谁被选中取决于
+// 亚像素差，陡降的最低点常常够不着；水平段中间也只会吸附到远处的端点。
+// 这里改为按台阶判定：
+//  - 指针在竖直段附近 → 取纵向最近的那条竖直段，再按指针落在它上半还是下半决定端点，
+//    于是陡降的最低点与陡升的最高点都能分别选中；
+//  - 指针在水平段上 → 选中这一级台阶的起点，并把 tooltip 的时间落到指针所在的时刻
+//    （台阶起点记在 hoverAt，供 tooltip 复用）。
+const HOVER_SNAP_PX = 6;
+let hoverAt = null;   // { t: 指针时刻, from: 台阶起点, idx } 仅当指针落在水平段时有效
+
+function steppedHit(chart, event) {
+  const meta = chart.getDatasetMeta(0);
+  const els = meta && meta.data;
+  const list = chart.data.datasets[0] && chart.data.datasets[0].data;
+  if (!list || !list.length || !els || !els.length) return [];
+
+  const pick = i => [{ element: els[i], datasetIndex: 0, index: i }];
+  // Chart.js 传进来的是它自己包装过的事件，x / y 已经是画布内坐标（CSS 像素）
+  const pos = event && Number.isFinite(event.x) && Number.isFinite(event.y)
+    ? { x: event.x, y: event.y }
+    : Chart.helpers.getRelativePosition(event, chart);
+  const t = chart.scales.x.getValueForPixel(pos.x);
+  const last = list.length - 1;
+  hoverAt = null;
+
+  if (!(t > list[0].x)) return pick(0);
+  if (t >= list[last].x) return pick(last);
+
+  // 二分出指针所在台阶的起点：list[lo].x <= t < list[lo + 1].x
+  let lo = 0, hi = last;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (list[mid].x <= t) lo = mid; else hi = mid - 1;
+  }
+
+  // 陡降 / 陡升在屏幕上只有一两像素宽，常有几个点挤在同一列，
+  // 所以在 lo 附近扫一小段，挑出纵向离指针最近的那条竖直段，再按上 / 下半取端点
+  let best = null;
+  for (let i = Math.max(0, lo - 3); i < Math.min(last, lo + 3); i++) {
+    const a = i, b = i + 1;
+    const dx = Math.abs(pos.x - els[b].x);
+    if (!Number.isFinite(dx) || dx > HOVER_SNAP_PX) continue;
+    const top = Math.min(els[a].y, els[b].y), bottom = Math.max(els[a].y, els[b].y);
+    const dy = pos.y < top ? top - pos.y : pos.y > bottom ? pos.y - bottom : 0;
+    if (!best || dy < best.dy || (dy === best.dy && dx < best.dx)) best = { a, b, dx, dy };
+  }
+  if (best) {
+    const { a, b } = best;
+    return pick(Math.abs(pos.y - els[b].y) <= Math.abs(pos.y - els[a].y) ? b : a);
+  }
+
+  hoverAt = { t, from: list[lo].x, idx: lo };
+  return pick(lo);
+}
+
+// 用的是上面的自定义命中模式；Chart.js 没加载时退回内置的 nearest
+function hitMode() {
+  if (typeof Chart === 'undefined' || !Chart.Interaction || !Chart.Interaction.modes) return 'nearest';
+  Chart.Interaction.modes.stepped = steppedHit;   // 幂等：重复赋值不影响
+  return 'stepped';
+}
+
+// tooltip 默认钉在数据点上；指针停在水平段上时改跟指针走，否则浮层会留在台阶起点那边
+function tooltipAnchor(items, evt) {
+  const el = items[0] && items[0].element;
+  const p = hoverAt && evt ? evt : el;
+  return p ? { x: p.x, y: p.y } : false;
+}
+
+// 图表库没有导出 positioners，只能从实例上取到那组定位器
+function anchorTooltip(chart) {
+  const cls = chart && chart.tooltip && chart.tooltip.constructor;
+  if (!cls || !cls.positioners) return false;
+  cls.positioners.anchor = tooltipAnchor;
+  return true;
+}
+
 function trendConfig(series) {
   const isBal = series.view === 'balance';
   const dayGrain = series.mode === 'bucket' && series.step >= DAY;   // 粗到按天时，台阶即"日终"
@@ -1761,18 +1839,25 @@ function trendConfig(series) {
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'nearest', intersect: false, axis: 'x' },
+      interaction: { mode: hitMode(), intersect: false },
       plugins: {
         legend: { display: false },          // 图例由标题右侧承担
         tooltip: {
+          position: 'anchor',               // 见 tooltipAnchor：水平段上跟随指针
           callbacks: {
             title: items => {
-              const t = items[0].parsed.x;
+              const item = items[0];
+              const t = hoverAt && hoverAt.idx === item.dataIndex ? hoverAt.t : item.parsed.x;
               return dayGrain ? `${md(t)} ${WD[new Date(t).getDay()]}` : `${md(t)} ${hm(t)}`;
             },
             label: c => {
               const p = c.raw;
               const y = money(p.y, store.cur);
+              // 指针停在水平段上：这里的余额是台阶起点沿用下来的，别把"这一步"算到指针身上
+              if (hoverAt && hoverAt.idx === c.dataIndex) {
+                const from = `${md(hoverAt.from)} ${hm(hoverAt.from)}`;
+                return [`${isBal ? '余额' : '累计'} ${y}`, `自 ${from} 起未变动`];
+              }
               if (isBal) {
                 if (p.tail) return [`余额 ${y}`, '之后暂无采样'];
                 if (dayGrain) {
@@ -1896,6 +1981,7 @@ function updateChart(m, series) {
   if (!trendChart || builtKey !== key) {
     if (trendChart) { trendChart.destroy(); trendChart = null; }
     trendChart = new Chart(document.getElementById('trendCanvas').getContext('2d'), trendConfig(series));
+    if (!anchorTooltip(trendChart)) trendChart.config.options.plugins.tooltip.position = 'average';
     builtKey = key;
     return;
   }
