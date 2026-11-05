@@ -276,12 +276,36 @@
     font-variant-numeric: tabular-nums; color: var(--ink-2);
   }
   .zoom__btn--span:hover { color: var(--ink); }
+  /* 定位到某个时刻：胶囊右侧一个按钮，点开是时间浮层 */
+  .pin-wrap { position: relative; display: inline-flex; align-items: center; gap: 4px; }
+  .zoom__btn--pin { min-width: 30px; padding: 0 8px; font-size: 0.78rem; }
+  .zoom__btn--pin.is-on { color: var(--accent-bright); background: var(--accent-soft); font-variant-numeric: tabular-nums; }
+  .pin-pop {
+    position: absolute; right: 0; top: calc(100% + 8px); z-index: 40;
+    width: 258px; padding: 12px;
+    background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
+  }
+  .pin-pop[hidden] { display: none; }
+  .pin-pop__row { display: flex; align-items: center; gap: 8px; }
+  .pin-pop__row + .pin-pop__row { margin-top: 8px; }
+  .pin-pop__row > span { flex: none; font-size: 0.72rem; color: var(--ink-3); }
+  .pin-pop input {
+    flex: 1; min-width: 0; padding: 4px 6px; color-scheme: dark;
+    font: 500 0.74rem/1.3 var(--sans); color: var(--ink); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  .pin-pop__acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pin-pop__hint { margin-top: 9px; font-size: 0.7rem; line-height: 1.55; color: var(--ink-3); }
+  .canvas-box.is-panning { cursor: grabbing; }
   /* 消费 / 余额 视图切换：与缩放控件同款胶囊，选中态给底色 */
   .seg__btn { min-width: 46px; padding: 0 10px; }
   .seg__btn.is-on { color: var(--ink); background: var(--surface-2); }
   .trend__meta { margin: -6px 0 10px; font-size: 0.73rem; color: var(--ink-3); }
   .trend__meta[hidden] { display: none; }
   .canvas-box { position: relative; width: 100%; height: 320px; }
+  /* 横向拖动用来平移时间窗口，纵向仍交给页面滚动 */
+  .canvas-box canvas { touch-action: pan-y; }
   .chart-empty {
     position: absolute;
     inset: 0;
@@ -866,10 +890,25 @@
           <button class="zoom__btn seg__btn" id="viewSpend" onclick="setChartView('spend')" aria-pressed="false">消费</button>
           <button class="zoom__btn seg__btn is-on" id="viewBalance" onclick="setChartView('balance')" aria-pressed="true">余额</button>
         </span>
-        <span class="zoom" role="group" aria-label="时间跨度">
-          <button class="zoom__btn" id="zoomOut" onclick="zoomChart(2)" title="放大时间跨度" aria-label="放大时间跨度">−</button>
-          <button class="zoom__btn zoom__btn--span" id="zoomLabel" onclick="zoomChart(0)" title="点击回到全部数据">全部</button>
-          <button class="zoom__btn" id="zoomIn" onclick="zoomChart(0.5)" title="缩小时间跨度，看得更细" aria-label="缩小时间跨度">＋</button>
+        <span class="pin-wrap">
+          <span class="zoom" role="group" aria-label="时间跨度">
+            <button class="zoom__btn" id="zoomOut" onclick="zoomChart(2)" title="放大时间跨度" aria-label="放大时间跨度">−</button>
+            <button class="zoom__btn zoom__btn--span" id="zoomLabel" onclick="zoomChart(0)" title="点击回到全部数据">全部</button>
+            <button class="zoom__btn" id="zoomIn" onclick="zoomChart(0.5)" title="缩小时间跨度，看得更细" aria-label="缩小时间跨度">＋</button>
+          </span>
+          <button class="zoom__btn zoom__btn--pin" id="pinBtn" onclick="togglePin()" aria-haspopup="true" aria-expanded="false" title="定位到某个时刻，看它之前的跨度">⏱</button>
+          <div class="pin-pop" id="pinPop" hidden>
+            <div class="pin-pop__row">
+              <span>截止到</span>
+              <input type="datetime-local" id="pinAt" step="60" aria-label="查看截止时刻">
+            </div>
+            <div class="pin-pop__row pin-pop__acts">
+              <button class="btn btn--ghost btn--sm" onclick="pinJump('spend')">最近一次消费</button>
+              <button class="btn btn--ghost btn--sm" onclick="pinJump('change')">最近一次变动</button>
+              <button class="btn btn--ghost btn--sm" onclick="pinNow()">回到现在</button>
+            </div>
+            <p class="pin-pop__hint">选一个时刻，图就显示它之前的 N 分钟/小时/天，然后用 − ＋ 调跨度；也可以直接在图上左右拖动。</p>
+          </div>
         </span>
       </span>
     </div>
@@ -1718,15 +1757,20 @@ function rateSpan(samples) {
   if (!samples || samples.length < 2) return out;
 
   const win = currentWindow();
-  const floor = Date.now() - win;
-  let first = samples.length - 1;
-  while (first > 0 && samples[first - 1].t >= floor) first--;
+  const end = anchorEnd();
+  const floor = end - win;
+  let lo = 0, hi = samples.length - 1;
+  while (lo < samples.length && samples[lo].t < floor) lo++;
+  while (hi >= 0 && samples[hi].t > end) hi--;
+  const label = windowLabel(win);
+  if (hi - lo < 1) return { spanMs: 0, spend: 0, winMs: win, win: label };
+
   let spend = 0;
-  for (let i = first + 1; i < samples.length; i++) {
+  for (let i = lo + 1; i <= hi; i++) {
     const delta = +(samples[i].b - samples[i - 1].b).toFixed(2);
     if (delta < 0) spend = +(spend - delta).toFixed(2);
   }
-  return { spanMs: samples[samples.length - 1].t - samples[first].t, spend, winMs: win, win: windowLabel(win) };
+  return { spanMs: samples[hi].t - samples[lo].t, spend, winMs: win, win: label };
 }
 
 // 跨度用最贴近的量级表达：42 分钟 / 1.3 小时 / 2.4 天
@@ -1740,7 +1784,7 @@ const fmtSpan = ms => {
 };
 
 // 卡片标题用的短跨度：全部 / 近 30 分钟 / 近 2 小时 / 近 3 天（窗口被数据长度夹住时仍算"全部"）
-const shortSpan = win => (!viewWindow || win >= dataSpan()
+const shortSpan = win => (!viewWindow || (!viewEnd && win >= dataSpan())
   ? '全部'
   : win < HOUR ? `近 ${Math.max(1, Math.round(win / 60000))} 分钟`
     : win <= SAMPLE_MODE_MAX ? `近 ${Math.max(1, Math.round(win / HOUR))} 小时` : `近 ${Math.round(win / DAY)} 天`);
@@ -1804,9 +1848,13 @@ const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'
 const VIEW_SLOT = 'ds_chart_view';
 const readView = () => { try { return localStorage.getItem(VIEW_SLOT) === 'spend' ? 'spend' : 'balance'; } catch { return 'balance'; } };
 let viewWindow = 0;          // 0 = 全部
+let viewEnd = 0;             // 0 = 跟随现在；>0 = 定位到某个时刻（窗口右端）
 let chartView = readView();  // 'spend' 累计消费 / 'balance' 余额
 let builtKey = '';           // 视图 + 粒度，任一变化都要重建实例
 let trendChart = null;
+
+// 窗口右端：定位到过去时就是个定值，否则跟着现在走
+const anchorEnd = () => (viewEnd || Date.now());
 
 function setChartView(view) {
   const next = view === 'balance' ? 'balance' : 'spend';
@@ -1832,11 +1880,11 @@ function currentWindow() {
   return Math.min(full, Math.max(MIN_WINDOW_MS, viewWindow));
 }
 
-// 窗口文案：全部 / 近 N 小时 / 近 N 天
+// 窗口文案：全部 / 近 N 分钟 / 近 N 小时 / 近 N 天
 function windowLabel(win) {
   const full = dataSpan();
   if (!full) return '无数据';
-  if (!viewWindow || win >= full) {
+  if (!viewWindow || (!viewEnd && win >= full)) {
     return full <= SAMPLE_MODE_MAX ? `全部 ${Math.max(1, Math.round(full / HOUR))} 小时` : `全部 ${Math.ceil(full / DAY)} 天`;
   }
   if (win < HOUR) return `近 ${Math.max(1, Math.round(win / 60000))} 分钟`;
@@ -1851,7 +1899,7 @@ function sampleSeries(from, now) {
   const first = s.findIndex(e => e.t >= from);
   if (first < 0) return { view: 'spend', pts: [], cum: 0, steps: 0, gap: false, lastAt: 0, from, now, mode: 'sample' };
 
-  for (let i = Math.max(first, 1); i < s.length; i++) {
+  for (let i = Math.max(first, 1); i < s.length && s[i].t <= now; i++) {
     const delta = +(s[i].b - s[i - 1].b).toFixed(2);
     if (delta >= 0) continue;                       // 充值 / 赠送到账不算消费
     cum = +(cum - delta).toFixed(2);
@@ -1921,20 +1969,22 @@ function balanceSampleSeries(from, now) {
   while (i > 0 && s[i].t > from) i--;                 // from 之前（含）最后一次采样
   const startAt = s[i];
   const gap = startAt.t < from - GAP_MS;              // 窗口起点那段没观测到
-  if (gap && i + 1 >= s.length) return { ...base, gap };  // 窗口内一次采样都没有
+  // 有缺口且窗口内根本没有采样（下一次采样在 now 之后）：这段时间什么都看不到
+  if (gap && (i + 1 >= s.length || s[i + 1].t > now)) return { ...base, gap };
 
   // 有缺口时旧余额早就过时了，从窗口内第一次采样起画，别把旧高点平铺进来撑高纵轴
   const head = gap ? s[i + 1] : startAt;
   const pts = [{ x: gap ? head.t : from, y: head.b }];
-  let prev = head.b, changes = 0, lastAt = 0;
-  for (let k = gap ? i + 2 : i + 1; k < s.length; k++) {
+  let prev = head.b, changes = 0, lastAt = 0, lastT = head.t;
+  for (let k = gap ? i + 2 : i + 1; k < s.length && s[k].t <= now; k++) {
+    lastT = s[k].t;
     if (s[k].b === prev) continue;
     pts.push({ x: s[k].t, y: s[k].b, delta: +(s[k].b - prev).toFixed(2) });
     prev = s[k].b;
     changes++;
     lastAt = s[k].t;
   }
-  if (now > s[s.length - 1].t) pts.push({ x: now, y: s[s.length - 1].b, tail: true });
+  if (now > lastT) pts.push({ x: now, y: prev, tail: true });
   return { ...base, pts, changes, gap, lastAt };
 }
 
@@ -1948,7 +1998,7 @@ function balanceBucketSeries(from, now, step) {
   while (i > 0 && s[i].t > from) i--;              // from 之前（含）最后一次采样
   const startAt = s[i];
   const gap = startAt.t < from - GAP_MS;
-  if (gap && i + 1 >= s.length) return { ...base, gap };
+  if (gap && (i + 1 >= s.length || s[i + 1].t > now)) return { ...base, gap };
 
   // 有缺口时空洞那段不画：起点余额早过时了，曲线从缺口之后第一个采样接着画
   const head = gap ? s[i + 1] : null;
@@ -1975,7 +2025,7 @@ function balanceBucketSeries(from, now, step) {
 
 function trendSeries() {
   const win = currentWindow();
-  const now = Date.now();
+  const now = anchorEnd();
   const from = now - win;
   const raw = chartView === 'balance' ? balanceSampleSeries(from, now) : sampleSeries(from, now);
   const step = bucketStep(win, raw.pts.length);
@@ -2200,17 +2250,159 @@ function initChart() {
   }
 }
 
-// 缩放：factor > 1 放大跨度，< 1 收窄；0 表示回到"全部"
+// 缩放：factor > 1 放大跨度，< 1 收窄；0 表示回到"全部 + 现在"
 function zoomChart(factor) {
   const full = dataSpan();
   if (!full) return;
   if (!factor) {
     viewWindow = 0;
+    viewEnd = 0;
   } else {
     const next = currentWindow() * factor;
-    viewWindow = next >= full ? 0 : Math.max(MIN_WINDOW_MS, Math.min(next, full));
+    // 定位在过去的窗口放不到"全部"（那会跳回现在），顶到最长即可
+    viewWindow = !viewEnd && next >= full ? 0 : Math.max(MIN_WINDOW_MS, Math.min(next, full));
   }
+  syncPin();
   render();
+}
+
+// ===== 定位到某个时刻（看"那时的近 N"）=====
+const toLocalInput = t => {
+  const d = new Date(t);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};
+const endLabel = t => (startOfDay(t) === startOfDay(Date.now()) ? hm(t) : `${md(t)} ${hm(t)}`);
+
+// 可选范围夹到"有采样的那段"，太靠前会连一次采样都没有
+function pinRange() {
+  const s = store.s;
+  if (!s.length) return null;
+  const now = Date.now();
+  return { lo: Math.min(s[0].t + MIN_WINDOW_MS, now), hi: now };
+}
+
+// 停在"全部"时定位：没有可平移的余量，先落一个整齐的跨度（≤ 一半数据量）
+const SPAN_LADDER = [MIN_WINDOW_MS, HOUR, 2 * HOUR, 6 * HOUR, 12 * HOUR, DAY, 2 * DAY, 3 * DAY, 7 * DAY, 14 * DAY, 30 * DAY];
+const niceSpan = ms => {
+  let pick = SPAN_LADDER[0];
+  for (const step of SPAN_LADDER) if (step <= ms) pick = step;
+  return Math.max(MIN_WINDOW_MS, pick);
+};
+
+function pinTo(t) {
+  const range = pinRange();
+  if (!range || !Number.isFinite(t)) return;
+  if (!viewWindow) viewWindow = niceSpan(dataSpan() / 2);
+  const at = Math.max(range.lo, Math.min(t, range.hi));
+  viewEnd = range.hi - at < 60000 ? 0 : at;   // 基本贴着现在就当没定位
+  syncPin();
+  render();
+}
+
+function pinNow() {
+  viewEnd = 0;
+  closePin();
+  syncPin();
+  render();
+}
+
+function pinJump(kind) {
+  const s = store.s;
+  for (let i = s.length - 1; i > 0; i--) {
+    const delta = +(s[i].b - s[i - 1].b).toFixed(2);
+    if (kind === 'spend' ? delta < 0 : delta !== 0) { pinTo(s[i].t); closePin(); return; }
+  }
+}
+
+function togglePin() {
+  const pop = document.getElementById('pinPop');
+  const btn = document.getElementById('pinBtn');
+  if (!pop || !btn) return;
+  const open = pop.hidden;
+  pop.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+  if (open) {
+    syncPin();
+    document.getElementById('pinAt')?.focus();
+  }
+}
+
+function closePin() {
+  const pop = document.getElementById('pinPop');
+  const btn = document.getElementById('pinBtn');
+  if (!pop || pop.hidden) return;
+  pop.hidden = true;
+  btn?.setAttribute('aria-expanded', 'false');
+}
+
+// 按钮兼作状态：没定位时是图标，定位后显示截止时刻
+function syncPin() {
+  const btn = document.getElementById('pinBtn');
+  const input = document.getElementById('pinAt');
+  if (btn) {
+    btn.classList.toggle('is-on', !!viewEnd);
+    btn.textContent = viewEnd ? endLabel(viewEnd) : '⏱';
+    btn.title = viewEnd ? `已定位到 ${md(viewEnd)} ${hm(viewEnd)} 为止，点击可改` : '定位到某个时刻，看它之前的跨度';
+  }
+  const range = pinRange();
+  if (input && range) {
+    input.min = toLocalInput(range.lo);
+    input.max = toLocalInput(range.hi);
+    if (document.activeElement !== input) input.value = toLocalInput(viewEnd || range.hi);
+  }
+}
+
+// 图上左右拖动 = 平移窗口（只在已经收窄跨度时生效，"全部"本来就没有余量）
+function initPan() {
+  const box = document.querySelector('.canvas-box');
+  const c = document.getElementById('trendCanvas');
+  if (!box || !c) return;
+  let drag = null, panRaf = 0;
+
+  c.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || !viewWindow || !trendChart) return;
+    drag = { x: e.clientX, end: anchorEnd(), moved: false, id: e.pointerId };
+  });
+
+  c.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (!drag.moved) {
+      if (Math.abs(dx) < 5) return;
+      drag.moved = true;
+      box.classList.add('is-panning');
+      c.setPointerCapture(drag.id);
+      if (trendChart) trendChart.tooltip.setActiveElements([], { x: 0, y: 0 });
+    }
+    const scale = trendChart && trendChart.scales.x;
+    const range = pinRange();
+    if (!scale || !range) return;
+    const msPerPx = (scale.max - scale.min) / Math.max(scale.right - scale.left, 1);
+    const at = Math.max(range.lo, Math.min(drag.end - dx * msPerPx, range.hi));
+    viewEnd = range.hi - at < 60000 ? 0 : at;
+    syncPin();
+    // 拖动时按帧合并重绘，别让每个 pointermove 都跑一次完整 render
+    if (!panRaf) panRaf = requestAnimationFrame(() => { panRaf = 0; render(); });
+  });
+
+  const stop = () => {
+    if (!drag) return;
+    if (drag.moved) box.classList.remove('is-panning');
+    drag = null;
+  };
+  c.addEventListener('pointerup', stop);
+  c.addEventListener('pointercancel', stop);
+
+  document.addEventListener('pointerdown', e => {
+    const pop = document.getElementById('pinPop');
+    if (!pop || pop.hidden) return;
+    if (!pop.contains(e.target) && e.target !== document.getElementById('pinBtn')) closePin();
+  });
+  document.getElementById('pinAt')?.addEventListener('change', e => {
+    const t = new Date(e.target.value).getTime();
+    if (Number.isFinite(t)) pinTo(t);
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePin(); });
 }
 
 // 视图切换按钮兼作图例：选中态即当前曲线，标题与画布无障碍名同步
@@ -2249,6 +2441,12 @@ function updateChart(m, series) {
   const meta = document.getElementById('trendMeta');
   if (meta) {
     const bits = [];
+    if (viewEnd) {
+      const start = viewEnd - win;
+      bits.push(startOfDay(start) === startOfDay(viewEnd)
+        ? `查看 ${md(start)} ${hm(start)} → ${hm(viewEnd)}`
+        : `查看 ${md(start)} ${hm(start)} → ${md(viewEnd)} ${hm(viewEnd)}`);
+    }
     if (series.mode === 'bucket') {
       const span = series.step >= DAY ? `${Math.round(series.step / DAY)} 天`
         : series.step >= HOUR ? `${Math.round(series.step / HOUR)} 小时`
@@ -2392,7 +2590,7 @@ function staleStamp() {
 function rateSub(m, total, cur) {
   const r = m.rate;
   const stale = staleStamp();
-  const lead = stale ? `${stale} · ` : '';
+  const lead = viewEnd ? `${md(viewEnd)} ${hm(viewEnd)} 为止 · ` : stale ? `${stale} · ` : '';
   if (!store.s.length) return '页面打开后开始采样';
   const scope = shortSpan(r.winMs);
   if (r.spanMs < MIN_RATE_SPAN) {
@@ -3350,6 +3548,8 @@ if (store && store.k && keyRing.has(store.k)) memoryKey = memoryKey || keyRing.g
 loadUsage();
 purgeLegacyKey();
 initChart();
+initPan();
+syncPin();
 bindUsageDrop();
 renderUsage();
 renderViewSwitch();
