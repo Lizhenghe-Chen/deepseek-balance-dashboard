@@ -62,18 +62,14 @@ git clone https://github.com/Lizhenghe-Chen/deepseek-balance-dashboard.git
 - **Key 默认不落盘**：只存在内存与当前标签页的 `sessionStorage`；想省事可在设置里勾选「记住 Key」，由你自己决定是否写进 `localStorage`。
 - **公开托管 = 公开代码，不是公开数据**：任何人打开网址看到的都是同一份前端，各自拥有自己的本地历史。
 
-边界与细节（同源风险、CSP 能挡什么、CSV 会不会上传）见 [隐私与安全](docs/security.md)。
+边界与细节（同源风险、CSP 能挡什么、CSV 会不会上传）见 [原理与部署](docs/technical.md#-隐私与安全)。
 
 ## 📚 文档
 
 | 文档 | 内容 |
 |---|---|
-| [使用与账户](docs/usage.md) | 多账户切换 / 后台采样、历史备份与迁移、官方用量 CSV、低余额提醒 |
-| [测量精度与消费口径](docs/accuracy.md) | 2 位小数带来的误差、消费怎么算、已知失真 |
-| [数据模型](docs/data-model.md) | `localStorage` 结构、采样与保留策略 |
-| [部署到 GitHub Pages](docs/deploy.md) | Pages 配置、自定义域名、公开托管注意事项 |
-| [隐私与安全](docs/security.md) | Key 存在哪、CSP 边界、同源风险 |
-| [FAQ](docs/faq.md) | 图表为空、CNY / USD、CSV 细节、采样频率、429 退避…… |
+| [使用指南](docs/guide.md) | 多账户切换 / 后台采样、趋势图缩放与定位、官方用量 CSV、低余额提醒、备份迁移、测量精度与消费口径、常见问题 |
+| [原理与部署](docs/technical.md) | 本地数据结构、采样与保留策略、隐私与安全边界、部署到 GitHub Pages |
 
 ## ❓ 常见问题
 
@@ -92,9 +88,9 @@ git clone https://github.com/Lizhenghe-Chen/deepseek-balance-dashboard.git
 <details>
 <summary><b>数据存在哪？怎么换电脑？</b></summary>
 
-全部在浏览器 `localStorage`（键名 `ds_history_v3`），按来源（origin）隔离。换设备 / 换浏览器请用顶栏「导出历史数据」写出一份 JSON，再到新环境「导入历史数据」合并；字段结构见 [数据模型](docs/data-model.md)。
+全部在浏览器 `localStorage`（键名 `ds_history_v3`），按来源（origin）隔离。换设备 / 换浏览器请用顶栏「导出历史数据」写出一份 JSON，再到新环境「导入历史数据」合并。
 
-换 Key、CNY / USD、CSV 规则、图表跨度、采样频率等更多问题见 [FAQ](docs/faq.md)。
+换 Key、CNY / USD、图表跨度与定位、CSV 规则、采样频率等更多问题见[使用指南 · 常见问题](docs/guide.md#-常见问题)。
 </details>
 
 ## 🛠 项目结构
@@ -104,12 +100,8 @@ git clone https://github.com/Lizhenghe-Chen/deepseek-balance-dashboard.git
 ├── index.html            # 全部实现：HTML + CSS + JS（单文件）
 ├── docs/
 │   ├── screenshot.jpg    # 界面预览图
-│   ├── usage.md          # 使用与账户
-│   ├── accuracy.md       # 测量精度与消费口径
-│   ├── data-model.md     # 数据模型
-│   ├── deploy.md         # 部署到 GitHub Pages
-│   ├── security.md       # 隐私与安全
-│   └── faq.md            # FAQ
+│   ├── guide.md          # 使用指南（账户、图表、CSV、口径、FAQ）
+│   └── technical.md      # 原理与部署（数据模型、隐私、Pages）
 ├── .nojekyll             # 让 GitHub Pages 原样发布，跳过 Jekyll
 ├── .gitignore
 ├── LICENSE
