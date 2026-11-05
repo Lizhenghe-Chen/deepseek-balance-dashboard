@@ -1710,6 +1710,7 @@ function perDayMap(samples) {
 // 窗口直接复用趋势图的 currentWindow()，两端再夹到"有采样的范围"里，
 // 避免把"数据早就停了、图右端却画到现在"这段空白算进分母。
 const MIN_RATE_SPAN = 15 * 60000;          // 更短的跨度不给速率：两个点除出来全是噪音
+const GAP_MS = 5 * 60000;                  // 窗口起点前超过这么久没采样，就当那段没观测到
 const SHORT_RATE_SPAN = 6 * 3600000;       // 更短的跨度，预测只当参考
 
 function rateSpan(samples) {
@@ -1856,7 +1857,7 @@ function sampleSeries(from, now) {
     cum = +(cum - delta).toFixed(2);
     steps++;
     lastAt = s[i].t;
-    if (s[i - 1].t < from - 5 * 60000) gap = true;  // 窗口前那一段无法定位
+    if (s[i - 1].t < from - GAP_MS) gap = true;     // 窗口前那一段无法定位
     pts.push({ x: s[i].t, y: cum, spend: -delta });
   }
   if (now > pts[pts.length - 1].x) pts.push({ x: now, y: cum, tail: true });
@@ -1907,7 +1908,7 @@ function spendBucketSeries(from, now, step) {
     pts.push({ x: end, y: cum, spend });
   }
   pts.push({ x: now, y: +(cum + take(now)).toFixed(2), tail: true });
-  return { ...base, pts, cum: pts[pts.length - 1].y, steps, lastAt, gap: startAt.t < from - 5 * 60000 };
+  return { ...base, pts, cum: pts[pts.length - 1].y, steps, lastAt, gap: startAt.t < from - GAP_MS };
 }
 
 // 余额级：窗口起点那一刻的余额 + 之后每一次变动；余额没变的采样不必画成点
@@ -1919,9 +1920,14 @@ function balanceSampleSeries(from, now) {
   let i = s.length - 1;
   while (i > 0 && s[i].t > from) i--;                 // from 之前（含）最后一次采样
   const startAt = s[i];
-  const pts = [{ x: from, y: startAt.b }];
-  let prev = startAt.b, changes = 0, lastAt = 0;
-  for (let k = i + 1; k < s.length; k++) {
+  const gap = startAt.t < from - GAP_MS;              // 窗口起点那段没观测到
+  if (gap && i + 1 >= s.length) return { ...base, gap };  // 窗口内一次采样都没有
+
+  // 有缺口时旧余额早就过时了，从窗口内第一次采样起画，别把旧高点平铺进来撑高纵轴
+  const head = gap ? s[i + 1] : startAt;
+  const pts = [{ x: gap ? head.t : from, y: head.b }];
+  let prev = head.b, changes = 0, lastAt = 0;
+  for (let k = gap ? i + 2 : i + 1; k < s.length; k++) {
     if (s[k].b === prev) continue;
     pts.push({ x: s[k].t, y: s[k].b, delta: +(s[k].b - prev).toFixed(2) });
     prev = s[k].b;
@@ -1929,7 +1935,7 @@ function balanceSampleSeries(from, now) {
     lastAt = s[k].t;
   }
   if (now > s[s.length - 1].t) pts.push({ x: now, y: s[s.length - 1].b, tail: true });
-  return { ...base, pts, changes, gap: startAt.t < from - 5 * 60000, lastAt };
+  return { ...base, pts, changes, gap, lastAt };
 }
 
 // 降采样后的余额：每个桶取桶内最后一次采样，台阶落在桶边界
@@ -1941,8 +1947,13 @@ function balanceBucketSeries(from, now, step) {
   let i = s.length - 1;
   while (i > 0 && s[i].t > from) i--;              // from 之前（含）最后一次采样
   const startAt = s[i];
-  const pts = [{ x: from, y: startAt.b }];
-  let level = startAt.b, changes = 0, lastAt = 0;
+  const gap = startAt.t < from - GAP_MS;
+  if (gap && i + 1 >= s.length) return { ...base, gap };
+
+  // 有缺口时空洞那段不画：起点余额早过时了，曲线从缺口之后第一个采样接着画
+  const head = gap ? s[i + 1] : null;
+  const pts = head ? [] : [{ x: from, y: startAt.b }];
+  let level = head ? head.b : startAt.b, changes = 0, lastAt = 0;
 
   const take = end => {
     const before = level;
@@ -1953,13 +1964,13 @@ function balanceBucketSeries(from, now, step) {
     return +(level - before).toFixed(2);
   };
 
-  for (let end = nextBucket(from, step); end < now; end = nextBucket(end, step)) {
+  for (let end = nextBucket(head ? head.t : from, step); end < now; end = nextBucket(end, step)) {
     const delta = take(end);
     pts.push({ x: end, y: level, delta });
   }
   const tailDelta = take(now);
   pts.push({ x: now, y: level, delta: tailDelta, tail: true });
-  return { ...base, pts, changes, lastAt, gap: startAt.t < from - 5 * 60000 };
+  return { ...base, pts, changes, lastAt, gap };
 }
 
 function trendSeries() {
@@ -2246,7 +2257,11 @@ function updateChart(m, series) {
     }
     if (isBal && series.changes) bits.push(`${series.changes} 次余额变动`);
     if (!isBal && series.steps) bits.push(`每 ${money(0.01, store.cur)} 一档 · ${series.steps} 笔`);
-    if (series.gap) bits.push('起点含隔夜缺口');
+    if (series.gap) {
+      bits.push(isBal && series.pts.length
+        ? `起点前有缺口，数据从 ${md(series.pts[0].x)} ${hm(series.pts[0].x)} 起`
+        : isBal ? '起点前有缺口' : '起点含隔夜缺口');
+    }
     meta.textContent = bits.join(' · ');
     meta.hidden = !bits.length;
   }
