@@ -1101,13 +1101,6 @@ const maskKey = key => (key ? `${key.slice(0, 3)}${'•'.repeat(6)}${key.slice(-
 // Key 本身从不落盘，所以"切回某个账户"= 重新粘贴它对应的 Key。
 const BACKUP_KEY = 'ds_history_backup';   // 只用于读取 v2 时代的一次性备份
 
-function readBackup() {
-  try {
-    const b = JSON.parse(localStorage.getItem(BACKUP_KEY) || 'null');
-    return b && b.store && Array.isArray(b.store.s) && b.store.s.length ? b : null;
-  } catch { return null; }
-}
-
 function describeKey() {
   const key = getKey();
   const last = store.s[store.s.length - 1];
@@ -1358,6 +1351,8 @@ function closeSettings() {
 }
 
 // ===== 工具 =====
+const HOUR = 3600 * 1000;
+const DAY = 24 * HOUR;
 const pad2 = n => String(n).padStart(2, '0');
 
 const clock = ts => {
@@ -1426,7 +1421,6 @@ let accounts = {};                                        // '指纹|币种' -> 
 let store = null;                                         // 当前档案的引用（结构不变，其它代码照旧读 store.s）
 let currencySwitchedFrom = '';
 
-const accKey = fp => `${fp}|${store ? store.cur : 'CNY'}`;
 const keyOf = rec => `${rec.k}|${rec.cur}`;
 
 function blankAccount(fp, cur) {
@@ -1750,7 +1744,7 @@ function perDayMap(samples) {
 // 避免把"数据早就停了、图右端却画到现在"这段空白算进分母。
 const MIN_RATE_SPAN = 15 * 60000;          // 更短的跨度不给速率：两个点除出来全是噪音
 const GAP_MS = 5 * 60000;                  // 窗口起点前超过这么久没采样，就当那段没观测到
-const SHORT_RATE_SPAN = 6 * 3600000;       // 更短的跨度，预测只当参考
+const SHORT_RATE_SPAN = 6 * HOUR;          // 更短的跨度，预测只当参考
 
 function rateSpan(samples) {
   const out = { spanMs: 0, spend: 0, winMs: 0, win: '' };
@@ -1778,16 +1772,10 @@ const fmtSpan = ms => {
   if (!(ms > 0)) return '0 分钟';
   const min = Math.round(ms / 60000);
   if (min < 60) return `${min} 分钟`;
-  const hours = ms / 3600000;
+  const hours = ms / HOUR;
   if (hours < 24) return `${hours < 10 ? hours.toFixed(1) : Math.round(hours)} 小时`;
-  return `${(ms / 86400000).toFixed(1)} 天`;
+  return `${(ms / DAY).toFixed(1)} 天`;
 };
-
-// 卡片标题用的短跨度：全部 / 近 30 分钟 / 近 2 小时 / 近 3 天（窗口被数据长度夹住时仍算"全部"）
-const shortSpan = win => (!viewWindow || (!viewEnd && win >= dataSpan())
-  ? '全部'
-  : win < HOUR ? `近 ${Math.max(1, Math.round(win / 60000))} 分钟`
-    : win <= SAMPLE_MODE_MAX ? `近 ${Math.max(1, Math.round(win / HOUR))} 小时` : `近 ${Math.round(win / DAY)} 天`);
 
 function analyze(samples) {
   const now = new Date();
@@ -1815,23 +1803,12 @@ function analyze(samples) {
   const today = daily[daily.length - 1];
   const rate = rateSpan(samples);
 
-  // ---- 最近 7 天：给"短期趋势"用，跨月也能连续 ----
-  const week = [];
-  for (let back = 6; back >= 0; back--) {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - back);
-    const key = localDate(d.getTime());
-    const c = dayCost(key, perDay.get(key));
-    week.push({ key, spend: c.spend, observed: c.observed, source: c.source, est: c.est, has: c.source !== 'none' });
-  }
-
   return {
-    monthSpend, monthCredit, daily, week, rate,
+    monthSpend, monthCredit, daily, rate,
     officialDays,
     todaySpend: today ? today.spend : 0,
     todaySource: today ? today.source : 'none',
     todayObserved: today ? today.observed : 0,
-    // 对账只看"官方覆盖到的那几天"，避免拿不同天数相减
-    observedSpend: daily.reduce((sum, d) => sum + d.observed, 0),
   };
 }
 
@@ -1840,8 +1817,6 @@ function analyze(samples) {
 // 只有点数超出一屏能看清的量级才按整小时/整天降采样（桶内余额取最后一次、消费累加），细节尽量不丢。
 // 缩放以"现在"为右端，− 放大跨度、＋ 收窄。
 const MIN_WINDOW_MS = 30 * 60000;
-const HOUR = 3600 * 1000;
-const DAY = 24 * HOUR;
 const SAMPLE_MODE_MAX = 30 * HOUR;   // 只影响窗口文案：≤30 小时说"小时"，更长说"天"
 const MAX_POINTS = 600;              // 一屏最多画多少级台阶，超过才降采样
 const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -1880,16 +1855,26 @@ function currentWindow() {
   return Math.min(full, Math.max(MIN_WINDOW_MS, viewWindow));
 }
 
-// 窗口文案：全部 / 近 N 分钟 / 近 N 小时 / 近 N 天
+// 跨度的量级文案：30 分钟 / 2 小时 / 11 天
+const nearLabel = win => (win < HOUR ? `${Math.max(1, Math.round(win / 60000))} 分钟`
+  : win <= SAMPLE_MODE_MAX ? `${Math.max(1, Math.round(win / HOUR))} 小时`
+    : `${Math.round(win / DAY)} 天`);
+
+// 正看着全部数据：没缩放，或定位后的跨度已经不短于全部（定位时不算"全部"）
+const isAllWindow = win => !viewWindow || (!viewEnd && win >= dataSpan());
+
+// 跨度按钮的文案：全部 11 天 / 近 30 分钟 / 近 3 天
 function windowLabel(win) {
   const full = dataSpan();
   if (!full) return '无数据';
-  if (!viewWindow || (!viewEnd && win >= full)) {
-    return full <= SAMPLE_MODE_MAX ? `全部 ${Math.max(1, Math.round(full / HOUR))} 小时` : `全部 ${Math.ceil(full / DAY)} 天`;
-  }
-  if (win < HOUR) return `近 ${Math.max(1, Math.round(win / 60000))} 分钟`;
-  return win <= SAMPLE_MODE_MAX ? `近 ${Math.max(1, Math.round(win / HOUR))} 小时` : `近 ${Math.round(win / DAY)} 天`;
+  if (!isAllWindow(win)) return `近 ${nearLabel(win)}`;
+  return full <= SAMPLE_MODE_MAX
+    ? `全部 ${Math.max(1, Math.round(full / HOUR))} 小时`
+    : `全部 ${Math.ceil(full / DAY)} 天`;
 }
+
+// 卡片标题里的短跨度（日均消耗 · 近 2 小时）
+const shortSpan = win => (isAllWindow(win) ? '全部' : `近 ${nearLabel(win)}`);
 
 // 采样级：窗口内的累计消费台阶，定位到"观测到它的那一刻"
 function sampleSeries(from, now) {
@@ -1928,14 +1913,21 @@ function nextBucket(t, step) {
   return dayStart + (Math.floor((t - dayStart) / step) + 1) * step;
 }
 
+// from 之前（含）最后一次采样的下标；数据全部在 from 之后时退到第一条
+function anchorIndex(from) {
+  const s = store.s;
+  let i = s.length - 1;
+  while (i > 0 && s[i].t > from) i--;
+  return i;
+}
+
 // 降采样后的累计消费：桶内观测到的扣款求和，台阶落在桶边界
 function spendBucketSeries(from, now, step) {
   const s = store.s;
   const base = { view: 'spend', mode: 'bucket', step, pts: [], cum: 0, steps: 0, gap: false, lastAt: 0, from, now };
   if (!s.length) return base;
 
-  let i = s.length - 1;
-  while (i > 0 && s[i].t > from) i--;              // from 之前（含）最后一次采样
+  let i = anchorIndex(from);
   const startAt = s[i];
   const pts = [{ x: from, y: 0 }];
   let cum = 0, steps = 0, lastAt = 0;
@@ -1965,15 +1957,13 @@ function balanceSampleSeries(from, now) {
   const base = { view: 'balance', mode: 'sample', pts: [], changes: 0, gap: false, lastAt: 0, from, now };
   if (!s.length) return base;
 
-  let i = s.length - 1;
-  while (i > 0 && s[i].t > from) i--;                 // from 之前（含）最后一次采样
-  const startAt = s[i];
+  const i = anchorIndex(from);
+  const startAt = s[i], next = s[i + 1];
   const gap = startAt.t < from - GAP_MS;              // 窗口起点那段没观测到
-  // 有缺口且窗口内根本没有采样（下一次采样在 now 之后）：这段时间什么都看不到
-  if (gap && (i + 1 >= s.length || s[i + 1].t > now)) return { ...base, gap };
+  if (gap && (!next || next.t > now)) return { ...base, gap };   // 这段一次采样都没有
 
   // 有缺口时旧余额早就过时了，从窗口内第一次采样起画，别把旧高点平铺进来撑高纵轴
-  const head = gap ? s[i + 1] : startAt;
+  const head = gap ? next : startAt;
   const pts = [{ x: gap ? head.t : from, y: head.b }];
   let prev = head.b, changes = 0, lastAt = 0, lastT = head.t;
   for (let k = gap ? i + 2 : i + 1; k < s.length && s[k].t <= now; k++) {
@@ -1994,14 +1984,13 @@ function balanceBucketSeries(from, now, step) {
   const base = { view: 'balance', mode: 'bucket', step, pts: [], changes: 0, gap: false, lastAt: 0, from, now };
   if (!s.length) return base;
 
-  let i = s.length - 1;
-  while (i > 0 && s[i].t > from) i--;              // from 之前（含）最后一次采样
-  const startAt = s[i];
+  let i = anchorIndex(from);
+  const startAt = s[i], next = s[i + 1];
   const gap = startAt.t < from - GAP_MS;
-  if (gap && (i + 1 >= s.length || s[i + 1].t > now)) return { ...base, gap };
+  if (gap && (!next || next.t > now)) return { ...base, gap };
 
   // 有缺口时空洞那段不画：起点余额早过时了，曲线从缺口之后第一个采样接着画
-  const head = gap ? s[i + 1] : null;
+  const head = gap ? next : null;
   const pts = head ? [] : [{ x: from, y: startAt.b }];
   let level = head ? head.b : startAt.b, changes = 0, lastAt = 0;
 
@@ -2289,12 +2278,18 @@ const niceSpan = ms => {
   return Math.max(MIN_WINDOW_MS, pick);
 };
 
-function pinTo(t) {
+// 把截止时刻夹进"有采样的那段"；贴着现在就当回到实时
+function setViewEnd(t) {
   const range = pinRange();
-  if (!range || !Number.isFinite(t)) return;
-  if (!viewWindow) viewWindow = niceSpan(dataSpan() / 2);
+  if (!range) return false;
   const at = Math.max(range.lo, Math.min(t, range.hi));
-  viewEnd = range.hi - at < 60000 ? 0 : at;   // 基本贴着现在就当没定位
+  viewEnd = range.hi - at < 60000 ? 0 : at;
+  return true;
+}
+
+function pinTo(t) {
+  if (!Number.isFinite(t) || !setViewEnd(t)) return;
+  if (!viewWindow) viewWindow = niceSpan(dataSpan() / 2);
   syncPin();
   render();
 }
@@ -2375,11 +2370,9 @@ function initPan() {
       if (trendChart) trendChart.tooltip.setActiveElements([], { x: 0, y: 0 });
     }
     const scale = trendChart && trendChart.scales.x;
-    const range = pinRange();
-    if (!scale || !range) return;
+    if (!scale) return;
     const msPerPx = (scale.max - scale.min) / Math.max(scale.right - scale.left, 1);
-    const at = Math.max(range.lo, Math.min(drag.end - dx * msPerPx, range.hi));
-    viewEnd = range.hi - at < 60000 ? 0 : at;
+    if (!setViewEnd(drag.end - dx * msPerPx)) return;
     syncPin();
     // 拖动时按帧合并重绘，别让每个 pointermove 都跑一次完整 render
     if (!panRaf) panRaf = requestAnimationFrame(() => { panRaf = 0; render(); });
@@ -2416,7 +2409,7 @@ function renderViewSwitch() {
   document.getElementById('trendCanvas').setAttribute('aria-label', isBal ? '余额趋势曲线' : '消费趋势曲线');
 }
 
-function updateChart(m, series) {
+function updateChart(series) {
   const win = currentWindow();
   const isBal = series.view === 'balance';
   const empty = !series.pts.length || (!isBal && !(series.cum > 0));
@@ -2564,12 +2557,12 @@ function render(info) {
   // 日均：跟着趋势图的跨度走（图上是近 2 小时就按 2 小时的趋势估）
   const r = m.rate;
   document.getElementById('avgDailyLabel').textContent = `日均消耗 · ${shortSpan(r.winMs)}`;
-  const perDay = r.spanMs >= MIN_RATE_SPAN ? r.spend / (r.spanMs / 86400000) : 0;
+  const perDay = r.spanMs >= MIN_RATE_SPAN ? r.spend / (r.spanMs / DAY) : 0;
   if (perDay > 0) setMoney('avgDaily', perDay, cur);
   else document.getElementById('avgDaily').textContent = '—';
   document.getElementById('avgDailySub').textContent = rateSub(m, total, cur);
 
-  updateChart(m, trendSeries());
+  updateChart(trendSeries());
   updateAccountPicker();
   document.getElementById('pollNote').textContent = pollInterval() / 60000;
   updatePeak();
@@ -2597,17 +2590,17 @@ function rateSub(m, total, cur) {
     return `${lead}${scope}内没有足够采样 · 换个跨度再试`;
   }
 
-  const perDay = r.spend / (r.spanMs / 86400000);
+  const perDay = r.spend / (r.spanMs / DAY);
   if (!(perDay > 0)) return `${lead}${scope}内没有消费`;
   // 0.01 的读数误差落在窗口总额上，折算成速率后按跨度缩放
-  const err = 0.01 / (r.spanMs / 86400000);
+  const err = 0.01 / (r.spanMs / DAY);
   const hi = Math.floor(total / Math.max(err, perDay - err));
   const lo = Math.floor(total / (perDay + err));
   const days = hi > lo ? `${lo}–${hi}` : `${lo}`;
   const left = hi > 0 ? `可用 ${days} 天` : '可用不足 1 天';
 
   if (r.spanMs < SHORT_RATE_SPAN) {
-    const perHour = r.spend / (r.spanMs / 3600000);
+    const perHour = r.spend / (r.spanMs / HOUR);
     const at = hi > 0 ? `约 ${days} 天` : '不足 1 天';
     return `${lead}观测 ${fmtSpan(r.spanMs)}（${money(perHour, cur)}/小时）· 按此速率${at}，仅供参考`;
   }
@@ -2630,7 +2623,7 @@ const HOLIDAYS = (() => {
     const [y1, m1, d1] = from.split('-').map(Number);
     const [y2, m2, d2] = to.split('-').map(Number);
     const end = Date.UTC(y2, m2 - 1, d2);
-    for (let t = Date.UTC(y1, m1 - 1, d1); t <= end; t += 86400000) {
+    for (let t = Date.UTC(y1, m1 - 1, d1); t <= end; t += DAY) {
       const d = new Date(t);
       set.add(`${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`);
     }
@@ -3314,7 +3307,6 @@ function renderUsage(m = analyze(store.s)) {
 }
 
 // ===== 主流程 =====
-const SILENT = Symbol('silent');   // 已单独提示过的错误，不再重复渲染
 let timer = null;
 let inflight = false;
 
