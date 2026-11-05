@@ -89,7 +89,7 @@ git clone https://github.com/Lizhenghe-Chen/deepseek-balance-dashboard.git
 .
 ├── index.html            # 全部实现：HTML + CSS + JS（单文件）
 ├── docs/
-│   ├── screenshot.jpg    # 界面预览图
+│   ├── screenshot.png    # 界面预览图
 │   ├── guide.md          # 使用指南（账户、图表、CSV、口径、FAQ）
 │   └── technical.md      # 原理与部署（数据模型、隐私、Pages）
 ├── .nojekyll             # 让 GitHub Pages 原样发布，跳过 Jekyll
