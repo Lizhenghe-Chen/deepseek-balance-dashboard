@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="referrer" content="no-referrer">
-<!-- 收窄外联出口：即便页面被注入，Key 也无法被发往 api.deepseek.com 以外的地址 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; connect-src https://api.deepseek.com; base-uri 'none'; form-action 'none'">
+<!-- 限制外联为余额接口与匿名页面计数；CSP 不保证被注入后的数据安全。 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; connect-src https://api.deepseek.com https://events.vercount.one; base-uri 'none'; form-action 'none'">
 <title>DeepSeek Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.js" integrity="sha384-zYPBGXwO4633CABX/5Spf6emCKUJCfoOkhOMYyxMsatqQZPnDblmmOewfjsIVWCM" crossorigin="anonymous"></script>
 <style>
@@ -950,7 +950,8 @@
   <div class="status" id="status" data-tone="info" role="status"><span class="status__dot"></span><span id="statusText">正在获取数据…</span><button class="status__undo" id="statusUndo" type="button" hidden>撤销</button></div>
 
   <footer class="foot">
-    <p>DeepSeek API · 前台每分钟采样 · 数据只保存在本机浏览器</p>
+    <p>DeepSeek API · 前台每分钟采样 · 账户数据只保存在本机浏览器</p>
+    <p>在线版使用 Vercount 统计匿名页面访问，仅发送页面路径；不读取或发送 Key、余额、历史数据及网址参数。本地版不计数。</p>
     <details class="foot__more">
       <summary>精度与口径说明</summary>
       <p>余额接口只返回 2 位小数（±¥0.005/次），所以单日数字有物理下限：不足 ¥0.01 的当天会显示 ¥0.00。页面未打开期间的整段消费会记到重新打开的那一天，跨零点处以黄色标注；导入官方用量后，已过去的日子改用官方日成本（精确到分），今天取官方与观测中的较大值。</p>
@@ -3587,6 +3588,21 @@ document.getElementById('statusUndo').addEventListener('click', () => {
   document.getElementById('statusUndo').hidden = true;
   if (action) action();
 });
+</script>
+<script data-pv="1">
+// One anonymous page view per document; never inspect account state or URL parameters.
+(() => {
+  if (!/^https?:$/.test(location.protocol) ||
+      !['bunnychen.top', 'www.bunnychen.top'].includes(location.hostname) ||
+      !(location.pathname === '/deepseek-balance-dashboard' || location.pathname.startsWith('/deepseek-balance-dashboard/')) ||
+      window.__bunnychenPageViewSent) return;
+  window.__bunnychenPageViewSent = true;
+  fetch('https://events.vercount.one/api/v2/log', {
+    method: 'POST', keepalive: true, credentials: 'omit', referrerPolicy: 'no-referrer',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({url: 'https://bunnychen.top' + location.pathname, isNewUv: false})
+  }).catch(() => {});
+})();
 </script>
 </body>
 </html>

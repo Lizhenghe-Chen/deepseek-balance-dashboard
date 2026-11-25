@@ -67,18 +67,18 @@
 
 ## 🔒 隐私与安全
 
-页面没有后端、没有统计、没有第三方分析；所有数据只写进你自己浏览器的存储。
+账户数据仍由浏览器保存，页面不设账户后端。正式域名下每次文档加载/刷新向 Vercount 发送一次匿名 PV：只发送 `https://bunnychen.top` 加页面路径和 `isNewUv: false`，不读取账户存储，不发送 query、hash、凭证或 referrer；统计服务仍可见网络 IP 等连接信息。内部操作不计数，localhost 和 file 不计数。
 
 | 问题 | 答案 |
 |---|---|
 | Key 会存到哪里？ | 两层「Key 环」：① `sessionStorage` 的 `ds_keys` 存**本标签页用过的全部 Key**（默认的唯一去处，关标签页即清）；② `localStorage` 的 `ds_keys_saved` **只存你勾了「后台 / 记住」的账户**，没勾的账户不会写盘。注意 `sessionStorage` **不是纯内存**——Chromium / Firefox 为支持「会话恢复」会把它写盘，崩溃恢复或「继续上次会话」时可能被还原。点「清除 Key」或关掉该账户的「后台」，对应的明文会立刻从存储中删除 |
-| Key 会被上传吗？ | 只会发给 DeepSeek 官方余额接口 `https://api.deepseek.com/user/balance`（`Authorization: Bearer`），不发往任何第三方；页面没有后端、没有统计 |
+| Key 会被上传吗？ | 只会发给 DeepSeek 官方余额接口 `https://api.deepseek.com/user/balance`（`Authorization: Bearer`），不发往任何第三方；计数脚本不读取账户状态 |
 | 设置面板里能看到明文 Key 吗？ | 不会。面板只显示 `sk-••••••1234` 这样的掩码与指纹，输入框永远为空，关闭面板即清空 |
 | 有第三方脚本吗？ | 只有 Chart.js（jsDelivr CDN，带 SRI 完整性校验，哈希已核对）。页面会因此向 jsDelivr 发起一次请求（对端可见 IP / UA，`referrer` 已设为 `no-referrer`） |
 | 历史数据在哪？ | 浏览器 `localStorage` 的 `ds_history_v3` 键（多账户，每份含余额快照与 Key 指纹，**不含 Key**）；字段见上文[数据模型](#-数据模型) |
 | 会同时把多个 Key 发出去吗？ | 会，但只发给你勾了「后台」的那些账户、以及当前正在显示的那一个，每次请求只带一个 Key 的 `Authorization`。请求之间错开 1.5 秒，不并发打同一个接口 |
 | 导入的 CSV 会被上传吗？ | 不会。文件只在本地用 `File.text()` 解析，仅保存文件名、账户 `user_id`、Key 名称、日期、模型 / 类型 / 数量 / 价格等用量信息到 `ds_usage_v3`；`api_key` 列整列跳过，不读取也不落盘 |
-| CSP 能防住 XSS 吗？ | **不能当成保证**。它挡住了 `fetch` / XHR / WebSocket / beacon / 表单 / 图片外发，只放行 `api.deepseek.com`；但 `script-src` 含 `'unsafe-inline'`（页面用内联 `onclick`），`connect-src` **不管顶层跳转**（`location='…?k='` 能带走 Key），且 CSP 写在 `<meta>` 里、托管方不下发 CSP 响应头——能改页面的人可以连 CSP 一起删掉。真正的防线是「页面里没有任何 HTML 注入点」（全部走 `textContent`） |
+| CSP 能防住 XSS 吗？ | **不能当成保证**。它挡住了 `fetch` / XHR / WebSocket / beacon / 表单 / 图片外发，仅允许 `api.deepseek.com` 与匿名 PV 端点 `events.vercount.one`；但 `script-src` 含 `'unsafe-inline'`（页面用内联 `onclick`），`connect-src` **不管顶层跳转**（`location='…?k='` 能带走 Key），且 CSP 写在 `<meta>` 里、托管方不下发 CSP 响应头——能改页面的人可以连 CSP 一起删掉。真正的防线是「页面里没有任何 HTML 注入点」（全部走 `textContent`） |
 | 公开托管会泄露 Key 吗？ | 托管方拿到的是同一份公开代码，看不到你在浏览器里输入的内容；但**同账号的其他 Pages 站点与本站同源**，它们（或浏览器扩展、DevTools）在特定条件下能读到 `sessionStorage`。要高保障：用独立子域，或把 HTML 下到本地用 `file://` 打开。详见[部署 · 公开托管时需要注意的三点](#-部署到-github-pages) |
 | 账户之间怎么区分？ | 历史里保存的是 Key 的 **djb2 指纹**（用于区分不同账号），不是 Key 本身。指纹不可逆推回 Key |
 
@@ -110,6 +110,6 @@
   - API Key 存在 `sessionStorage`（仅当前标签页），但如果你在**同一标签页**里跳转到该 origin 下的其他页面，对方在这次会话中可以看到它；
   - 同源页面还可以为整个 origin 注册 Service Worker。**因此同源站点的安全性等于其中 weakest 的那一个**。
   - 在意的话：给本仓库的 Pages 单独配置一个子域名（Settings → Pages → Custom domain，例如 `dash.bunnychen.top`），它就拥有独立 origin，与博客等页面彻底隔离；也可以把 `index.html` 下载到本地双击打开（`file://` 是独立来源，任何网站都读不到它的存储）。
-- **必须走 HTTPS**。Pages 默认提供。CSP 的作用是**收窄脚本能主动外发的通道**：`connect-src` 只允许 `api.deepseek.com`，且没有 `eval` / `new Function`。但它不是「被注入也安全」的保证，具体边界见上文[隐私与安全](#-隐私与安全)。输入框用 `autocomplete="new-password"` 降低被密码管理器收录的概率。
+- **必须走 HTTPS**。Pages 默认提供。CSP 的作用是**收窄脚本能主动外发的通道**：`connect-src` 仅允许 `api.deepseek.com` 和匿名 PV 端点 `events.vercount.one`，且没有 `eval` / `new Function`。但它不是「被注入也安全」的保证，具体边界见上文[隐私与安全](#-隐私与安全)。输入框用 `autocomplete="new-password"` 降低被密码管理器收录的概率。
 
 > 也可以部署到 Cloudflare Pages / Netlify / Vercel 等任意静态托管，行为一致。
